@@ -4,6 +4,51 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.3.1] — 2026-05-30
+
+### Fixed
+
+- **Client "Open full DNS Portal" button was broken** — the `?a=sso` action in the
+  client area had no handler; clicking it silently re-rendered the overview page.
+  Fixed with a dedicated `sso` branch in `clientArea()` that mints a 60-second SSO
+  token and redirects via a new `sso-redirect.tpl` Smarty template with a JS guard
+  that only navigates to `https://` URLs.
+- **`openPortal` dead code removed** — `paneldns_reseller_openPortal()` and the
+  corresponding `openPortal()` service method were unreachable since `AdminSingleSignOn()`
+  replaced them in v1.3.0. Both removed.
+- **`'usage'` removed from `ClientAreaAllowedFunctions`** — it was listed as an
+  allowed client area action but had no handler. Removing it avoids WHMCS silently
+  routing `?a=usage` requests to the default overview.
+
+### Added
+
+- **`ServiceSingleSignOn()` — client-facing SSO** — adds a "Login to PanelDNS" link
+  button to the client's service page in the WHMCS client area (outside the module's
+  own template). Mints a 60-second SSO token and redirects the client's browser to
+  their authenticated portal session. Complements `AdminSingleSignOn()` (admin-side)
+  added in v1.3.0.
+- **`ServiceSingleSignOnLabel`** added to `MetaData()`.
+- **`UsageUpdate()`** — WHMCS now populates its usage graphs for services on this
+  module. Zone count maps to "Disk" and record count maps to "Bandwidth" — the
+  standard pattern for DNS modules without actual disk/bandwidth metrics.
+- **Welcome email template documented in INSTALL.md** — Step 5 now explains that
+  `"PanelDNS Reseller Welcome"` must be manually created in WHMCS Email Templates
+  before welcome emails will send. Without the template, provisioning succeeds silently
+  and the client receives nothing. Includes the available merge fields and a note that
+  the "Resend Welcome Email" admin button can be used as a manual fallback.
+- **New test files** — 3 new PHPUnit test files covering security-sensitive pure logic:
+  - `PanelDnsApiSecurityTest` — `isPrivateIp()` (all RFC ranges + edge cases) and
+    `redactUrl()` (all sensitive param names, case insensitivity, multiple params)
+  - `PanelDnsResellerHooksTest` — addon zone count regex (9 cases), grace period date
+    comparison logic, grace marker regex parsing
+  - `EmbeddedDnsManagerSecurityTest` — record type allowlist (13 allowed + 7 rejected),
+    BIND import size cap arithmetic, CSRF token entropy, SSO redirect URL safety guard
+  - Test count: 109 tests, 134 assertions (up from 63 tests before this release)
+- **`decrypt()` stub added to test bootstrap** — allows `PanelDnsResellerHooks.php`
+  to be loaded in the test environment without the WHMCS `decrypt()` function.
+
+---
+
 ## [1.3.0] — 2026-05-30
 
 ### Added

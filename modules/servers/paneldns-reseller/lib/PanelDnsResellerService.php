@@ -214,20 +214,69 @@ class PanelDnsResellerService
         return $sum['ok'] ? 'success' : ('Auth failed: ' . ($sum['error'] ?: ''));
     }
 
-    public function openPortal(): string
-    {
-        $id = $this->subClientId();
-        if (!$id) return 'No sub-client id.';
-        $resp = $this->api->mintSubClientSsoToken($id);
-        return $resp['ok'] ? 'success' : ('SSO mint failed: ' . ($resp['error'] ?: ''));
-    }
-
     public function resyncStatus(): string
     {
         $id = $this->subClientId();
         if (!$id) return 'No sub-client id.';
         $resp = $this->api->subClientSummary($id);
         return $resp['ok'] ? 'success' : ($resp['error'] ?: '');
+    }
+
+    /**
+     * ServiceSingleSignOn / client SSO: mint a portal token and return a redirect URL.
+     * Called by WHMCS when the client clicks "Login to PanelDNS" on their service page,
+     * and also by the clientArea() 'sso' action for the in-template portal button.
+     *
+     * @return array{success: bool, redirectUrl?: string, errorMsg?: string}
+     */
+    public static function clientSso(array $params): array
+    {
+        try {
+            $svc = new self($params);
+            $id  = $svc->subClientId();
+            if (!$id) {
+                return ['success' => false, 'errorMsg' => 'Service not provisioned yet.'];
+            }
+            $resp = $svc->api->mintSubClientSsoToken($id);
+            if (!$resp['ok'] || empty($resp['data']['login_url'])) {
+                return ['success' => false, 'errorMsg' => $resp['error'] ?? 'SSO token mint failed.'];
+            }
+            return ['success' => true, 'redirectUrl' => $resp['data']['login_url']];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'errorMsg' => 'paneldns-reseller: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * UsageUpdate: return zone/record counts for WHMCS usage graphs.
+     * Zone count maps to "disk" and record count to "bandwidth" — the standard
+     * pattern for non-hosting modules without actual disk/bandwidth metrics.
+     *
+     * @return array{success: bool, diskusage?: int, disklimit?: int, bwusage?: int, bwlimit?: int}
+     */
+    public static function usageUpdate(array $params): array
+    {
+        try {
+            $svc = new self($params);
+            $id  = $svc->subClientId();
+            if (!$id) return ['success' => false];
+
+            $resp = $svc->api->subClientSummary($id);
+            if (!$resp['ok']) return ['success' => false];
+
+            $usage  = $resp['data']['usage']  ?? [];
+            $limits = $resp['data']['limits'] ?? [];
+
+            return [
+                'success'   => true,
+                'diskusage' => (int) ($usage['zones']   ?? 0),
+                'disklimit' => (int) ($limits['zones']  ?? 0),
+                'bwusage'   => (int) ($usage['records'] ?? 0),
+                'bwlimit'   => (int) ($limits['records'] ?? 0),
+            ];
+        } catch (\Throwable $e) {
+            return ['success' => false];
+        }
     }
 
     /**
@@ -644,6 +693,31 @@ class PanelDnsResellerService
         // manager (zones / records / create / import / mutations) or
         // the legacy "overview" template with usage cards + SSO button.
         $action = $params['customAction'] ?? '';
+
+        // SSO-CLIENT-01: handle the in-template "Open full DNS Portal" button.
+        // Mints a 60-second SSO token and redirects via a JS template.
+        // ServiceSingleSignOn() handles the same flow from WHMCS's own link button.
+        if ($action === 'sso') {
+            $svc = new self($params);
+            $id  = $svc->subClientId();
+            if ($id) {
+                $resp = $svc->api->mintSubClientSsoToken($id);
+                if ($resp['ok'] && !empty($resp['data']['login_url'])) {
+                    return [
+                        'templatefile' => 'templates/client/sso-redirect',
+                        'vars'         => ['redirect_url' => $resp['data']['login_url']],
+                    ];
+                }
+            }
+            return [
+                'templatefile' => 'templates/client/overview',
+                'vars'         => [
+                    'paneldns_error'       => 'Could not generate portal login link.',
+                    'paneldns_nameservers' => [],
+                ],
+            ];
+        }
+
         $embeddedActions = [
             'zones', 'records', 'zone-create', 'zone-import',
             'do-zone-create', 'do-zone-import', 'do-zone-delete',

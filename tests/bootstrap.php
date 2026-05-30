@@ -40,6 +40,10 @@ if (!class_exists('\\WHMCS\\Cache\\Store', false)) {
     ');
 }
 
+if (!function_exists('decrypt')) {
+    function decrypt(string $s): string { return $s; } // stub — no encryption in tests
+}
+
 // Load the production shared/ classes.
 require __DIR__ . '/../shared/PanelDnsApi.php';
 require __DIR__ . '/../shared/LicenceCheck.php';

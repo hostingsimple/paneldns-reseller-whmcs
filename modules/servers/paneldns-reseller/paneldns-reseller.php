@@ -31,7 +31,7 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '1.3.0');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.3.1');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';
@@ -47,6 +47,9 @@ function paneldns_reseller_MetaData(): array
         // service detail page that redirects the admin's browser to the
         // sub-client's authenticated portal session via SSO.
         'AdminSingleSignOnLabel'                   => 'Login to PanelDNS as Client',
+        // Adds "Login to PanelDNS" to the client's service page in the
+        // WHMCS client area, outside the module's own template.
+        'ServiceSingleSignOnLabel'                 => 'Login to PanelDNS',
         'ListAccountsUniqueIdentifierDisplayName'  => 'PanelDNS Sub-client ID',
         // Sub-client IDs are stored in tblhosting.dedicatedip — this tells
         // WHMCS which service field to compare against ListAccounts results.
@@ -192,11 +195,6 @@ function paneldns_reseller_testConnection(array $params): string
     return PanelDnsResellerService::run('testConnection', $params);
 }
 
-function paneldns_reseller_openPortal(array $params): string
-{
-    return PanelDnsResellerService::run('openPortal', $params);
-}
-
 function paneldns_reseller_resyncStatus(array $params): string
 {
     return PanelDnsResellerService::run('resyncStatus', $params);
@@ -240,6 +238,28 @@ function paneldns_reseller_ListAccounts(array $params): array
     return PanelDnsResellerService::listAccounts($params);
 }
 
+/**
+ * ServiceSingleSignOn — WHMCS calls this when the client clicks
+ * "Login to PanelDNS" on their service page in the client area.
+ * Works the same as AdminSingleSignOn but is triggered client-side.
+ *
+ * @return array{success: bool, redirectUrl?: string, errorMsg?: string}
+ */
+function paneldns_reseller_ServiceSingleSignOn(array $params): array
+{
+    return PanelDnsResellerService::clientSso($params);
+}
+
+/**
+ * UsageUpdate — WHMCS calls this periodically to pull resource usage
+ * into its usage graphs and reporting. Returns zone count as "disk"
+ * and record count as "bandwidth" — the standard pattern for DNS modules.
+ */
+function paneldns_reseller_UsageUpdate(array $params): array
+{
+    return PanelDnsResellerService::usageUpdate($params);
+}
+
 function paneldns_reseller_ClientArea(array $params): array
 {
     return PanelDnsResellerService::clientArea($params);
@@ -248,8 +268,8 @@ function paneldns_reseller_ClientArea(array $params): array
 function paneldns_reseller_ClientAreaAllowedFunctions(): array
 {
     return [
-        // Existing
-        'sso', 'usage',
+        // SSO redirect — handled by clientArea() sso action
+        'sso',
         // T1.4 embedded DNS — page renders
         'zones', 'records', 'zone-create', 'zone-import',
         // T1.4 embedded DNS — mutations (form POST targets)

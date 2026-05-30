@@ -147,7 +147,35 @@ platform provider — your clients and your own admin setup see only your brand.
 
 ---
 
-## Step 5 — Test with a real order
+## Step 5 — Create the welcome email template
+
+The module sends a welcome email when a client is provisioned, but only if the
+WHMCS email template exists. If the template is missing, provisioning succeeds
+silently and the client receives nothing — no error is shown.
+
+1. Go to **WHMCS Admin → Setup → Email Templates → Create New Email Template**
+2. Set:
+   - **Email Type:** Product
+   - **Unique Name:** `PanelDNS Reseller Welcome` *(must match exactly)*
+   - **Subject:** `Your DNS Account is Ready — {$service_product_name}`
+3. In the email body, use these merge fields:
+
+   | Merge field | What it contains |
+   |---|---|
+   | `{$paneldns_login_url}` | One-time SSO link (valid 60 seconds) |
+   | `{$paneldns_portal_url}` | Long-lived portal URL (bookmark this) |
+   | `{$paneldns_nameservers}` | Nameservers to set at their registrar |
+   | `{$service_domain}` | The client's domain (standard WHMCS field) |
+
+4. Save the template
+
+> **Tip:** If you set **Send Welcome Email** to `No` on the product, no email is sent
+> and this template is not required. Admins can still trigger a send manually via the
+> **Resend Welcome Email** button on any service.
+
+---
+
+## Step 6 — Test with a real order
 
 Place a test order:
 
@@ -169,7 +197,7 @@ Verify it worked:
 
 ---
 
-## Step 6 — (Optional) Bulk sync existing WHMCS clients
+## Step 7 — (Optional) Bulk sync existing WHMCS clients
 
 If you already have WHMCS clients who should have PanelDNS accounts but were
 provisioned before this module was installed, use the bulk sync to catch them up.
@@ -198,7 +226,7 @@ Created: 12 | Linked: 3 | Skipped (already provisioned): 47
 
 ---
 
-## Step 7 — (Optional) White-label nameservers
+## Step 8 — (Optional) White-label nameservers
 
 If you want clients to see your own nameservers (e.g. `ns1.yourbrand.com`) instead
 of the PanelDNS defaults:
@@ -216,7 +244,7 @@ for provider-specific setup.
 
 ---
 
-## Step 8 — (Optional) Addon products for extra zones
+## Step 9 — (Optional) Addon products for extra zones
 
 You can sell zone-limit upgrades as WHMCS product addons:
 
@@ -236,7 +264,7 @@ If no number is found in the addon name, 5 extra zones is assumed as a fallback.
 
 ---
 
-## Step 9 — (Optional) Automatic zone creation on domain registration
+## Step 10 — (Optional) Automatic zone creation on domain registration
 
 When a client registers or transfers a domain through WHMCS (via any registrar
 module), this module can automatically create a matching DNS zone in PanelDNS.
