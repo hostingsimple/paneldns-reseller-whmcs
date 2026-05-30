@@ -1,5 +1,9 @@
 # PanelDNS Reseller WHMCS Module — Development Specification
 
+> **Ecosystem context:** for how this repo fits with the SaaS platform and the platform
+> WHMCS module — and the shared-file sync rules — see `ECOSYSTEM.md` in the main
+> `paneldns` repo (https://github.com/Veeau/paneldns/blob/master/ECOSYSTEM.md).
+
 ## AI Assistant Rules
 
 - **Check / scan / audit / question → report only.** When asked to check, scan, audit, review,
