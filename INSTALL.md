@@ -145,6 +145,22 @@ platform provider — your clients and your own admin setup see only your brand.
 6. Set your pricing on the **Pricing** tab as normal
 7. Click **Save Changes**
 
+### Optional: let customers choose their zone limit at checkout
+
+The module reads WHMCS Configurable Options before falling back to the product-level
+Zone Limit. To offer a "choose your plan size" dropdown at order time:
+
+1. **Setup → Products/Services → Configurable Options → Create a New Group**
+2. Add an option named exactly **`Zone Limit`** (and optionally
+   **`Max Records Per Zone`**)
+3. Add the values customers can pick — e.g. `5`, `10`, `25`
+4. Link the option group to your product on its **Configurable Options** tab
+
+The customer's selection takes precedence; if no Configurable Option is set, the
+product's Module Settings value is used. This is distinct from **addon products**
+(Step 9), which *add* extra zones to an existing limit after provisioning — use
+Configurable Options for the base plan size, addons for upgrades.
+
 ---
 
 ## Step 5 — Create the welcome email template
