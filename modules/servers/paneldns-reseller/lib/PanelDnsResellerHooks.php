@@ -117,7 +117,8 @@ class PanelDnsResellerHooks
                 }
             }
         } catch (\Throwable $e) {
-            logActivity('PanelDNS domain hook error: ' . $e->getMessage());
+            // SEC-L06: log class only — exception messages may contain PII or SQL fragments.
+            logActivity('PanelDNS domain hook error (' . get_class($e) . ')');
         }
     }
 
@@ -185,7 +186,8 @@ class PanelDnsResellerHooks
 
             $api->patchSubClient($subClientId, ['zone_limit' => $newLimit]);
         } catch (\Throwable $e) {
-            logActivity('PanelDNS addon hook error: ' . $e->getMessage());
+            // SEC-L06: log class only — exception messages may contain PII or SQL fragments.
+            logActivity('PanelDNS addon hook error (' . get_class($e) . ')');
         }
     }
 

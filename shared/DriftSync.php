@@ -133,7 +133,9 @@ class PanelDnsDriftSync
                 'serverhostname'   => $s->hostname,
                 'serverport'       => $s->secure ? 443 : 80,
                 'serversecure'     => (bool) $s->secure,
-                'serveraccesshash' => $s->accesshash,
+                // SEC-H01: accesshash is stored encrypted in tblservers; decrypt
+                // before use. Matches PanelDnsResellerHooks::apiForServer() pattern.
+                'serveraccesshash' => function_exists('decrypt') ? decrypt($s->accesshash) : (string) $s->accesshash,
             ];
         } catch (\Throwable $e) {
             return null;

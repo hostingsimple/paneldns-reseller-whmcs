@@ -142,7 +142,8 @@ class PanelDnsEmbeddedDnsManager
             return $this->withFlash('error', $resp['error'] ?? 'Failed to create zone.', $this->renderZoneCreate());
         }
 
-        $this->flash('success', "Zone {$name} created.");
+        // SEC-M01: escape user-supplied name before embedding in flash message.
+        $this->flash('success', 'Zone ' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . ' created.');
         return $this->redirectTo('zones');
     }
 
@@ -153,6 +154,10 @@ class PanelDnsEmbeddedDnsManager
 
         if ($zoneId <= 0)        return $this->withFlash('error', 'Pick a zone first.', $this->renderZoneImport());
         if (trim($bindText) === '') return $this->withFlash('error', 'Paste BIND-format zone text.', $this->renderZoneImport());
+        // SEC-M03: cap import payload to prevent memory-exhaustion DoS.
+        if (strlen($bindText) > 512 * 1024) {
+            return $this->withFlash('error', 'Import data too large (max 512 KB).', $this->renderZoneImport());
+        }
 
         if (!$this->fetchOwnZone($zoneId)) {
             return $this->withFlash('error', 'Zone not found.', $this->renderZoneImport());
@@ -194,7 +199,12 @@ class PanelDnsEmbeddedDnsManager
             return $this->withFlash('error', 'Zone not found.', $this->renderZonesList());
         }
 
-        $payload = $this->recordPayloadFromPost();
+        try {
+            $payload = $this->recordPayloadFromPost();
+        } catch (\InvalidArgumentException $e) {
+            $this->flash('error', $e->getMessage());
+            return $this->redirectTo('records', "&zone={$zoneId}");
+        }
         $resp = $this->api->post("/api/v1/zones/{$zoneId}/records", $payload);
 
         if (!$resp['ok']) {
@@ -213,7 +223,12 @@ class PanelDnsEmbeddedDnsManager
             return $this->withFlash('error', 'Record not found.', $this->renderZonesList());
         }
 
-        $payload = $this->recordPayloadFromPost();
+        try {
+            $payload = $this->recordPayloadFromPost();
+        } catch (\InvalidArgumentException $e) {
+            $this->flash('error', $e->getMessage());
+            return $this->redirectTo('records', "&zone={$zoneId}");
+        }
         $resp = $this->api->patch("/api/v1/zones/{$zoneId}/records/{$recordId}", $payload);
 
         if (!$resp['ok']) {
@@ -263,9 +278,20 @@ class PanelDnsEmbeddedDnsManager
 
     private function recordPayloadFromPost(): array
     {
+        // SEC-M02: allowlist record types before forwarding to the API.
+        static $allowed = [
+            'A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA',
+            'PTR', 'TLSA', 'SSHFP', 'HTTPS', 'NAPTR',
+        ];
+        $type = strtoupper(trim((string) ($_POST['type'] ?? 'A')));
+        if (!in_array($type, $allowed, true)) {
+            throw new \InvalidArgumentException(
+                'Invalid record type: ' . htmlspecialchars($type, ENT_QUOTES, 'UTF-8')
+            );
+        }
         return array_filter([
             'name'     => trim((string) ($_POST['name'] ?? '@')),
-            'type'     => strtoupper(trim((string) ($_POST['type'] ?? 'A'))),
+            'type'     => $type,
             'content'  => trim((string) ($_POST['content'] ?? '')),
             'ttl'      => (int) ($_POST['ttl'] ?? 3600),
             'priority' => isset($_POST['priority']) && $_POST['priority'] !== ''
@@ -278,13 +304,15 @@ class PanelDnsEmbeddedDnsManager
 
     private function flash(string $type, string $msg): void
     {
-        if (!isset($_SESSION)) @session_start();
+        // SEC-L03: avoid @session_start() — masks misconfig and hides session errors.
+        if (session_status() === PHP_SESSION_NONE) { session_start(); }
         $_SESSION['paneldns_flash'] = ['type' => $type, 'msg' => $msg];
     }
 
     private function popFlash(): ?array
     {
-        if (!isset($_SESSION)) @session_start();
+        // SEC-L03: avoid @session_start() — masks misconfig and hides session errors.
+        if (session_status() === PHP_SESSION_NONE) { session_start(); }
         $f = $_SESSION['paneldns_flash'] ?? null;
         unset($_SESSION['paneldns_flash']);
         return $f;
@@ -324,7 +352,8 @@ class PanelDnsEmbeddedDnsManager
      */
     private function csrfToken(): string
     {
-        if (!isset($_SESSION)) @session_start();
+        // SEC-L03: avoid @session_start() — masks misconfig and hides session errors.
+        if (session_status() === PHP_SESSION_NONE) { session_start(); }
         $key = 'paneldns_csrf_' . (int) $this->params['serviceid'];
         if (empty($_SESSION[$key])) {
             $_SESSION[$key] = bin2hex(random_bytes(24));
@@ -334,7 +363,8 @@ class PanelDnsEmbeddedDnsManager
 
     private function requireCsrf(): void
     {
-        if (!isset($_SESSION)) @session_start();
+        // SEC-L03: avoid @session_start() — masks misconfig and hides session errors.
+        if (session_status() === PHP_SESSION_NONE) { session_start(); }
         $expected = $_SESSION['paneldns_csrf_' . (int) $this->params['serviceid']] ?? '';
         $supplied = (string) ($_POST['csrf'] ?? '');
         if ($expected === '' || !hash_equals($expected, $supplied)) {

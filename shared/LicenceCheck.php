@@ -136,8 +136,9 @@ class PanelDnsLicenceCheck
         };
 
         $reactivationUrl = self::reactivationUrl();
+        // SEC-L04: escape the URL before embedding in the banner — value comes from DB.
         $action = $reactivationUrl
-            ? "Reactivate at: {$reactivationUrl}"
+            ? 'Reactivate at: ' . htmlspecialchars($reactivationUrl, ENT_QUOTES, 'UTF-8')
             : 'Reactivate at: your PanelDNS billing page (set the Reactivation URL in Setup → Addon Modules → PanelDNS).';
 
         $expiry = $expiresAt

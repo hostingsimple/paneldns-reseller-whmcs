@@ -28,7 +28,8 @@ add_hook('DailyCronJob', 1, function () {
         PanelDnsDriftSync::run();
     } catch (\Throwable $e) {
         if (function_exists('logActivity')) {
-            logActivity('PanelDNS drift sync (reseller) hook crashed: ' . $e->getMessage());
+            // SEC-L06: log class only — exception messages may contain PII or SQL fragments.
+        logActivity('PanelDNS drift sync (reseller) hook crashed: ' . get_class($e));
         }
     }
 });

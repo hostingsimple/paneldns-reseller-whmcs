@@ -4,6 +4,46 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.2.1] — 2026-05-30
+
+### Security
+
+Full OWASP audit — all findings fixed:
+
+- **[HIGH] DriftSync broken authentication** (`shared/DriftSync.php`) — `loadServerParams()`
+  was returning the raw encrypted `accesshash` from `tblservers` without calling `decrypt()`.
+  Every API call made by the daily drift sync silently failed authentication. Fixed to call
+  `decrypt()` matching the pattern used in `PanelDnsResellerHooks::apiForServer()`.
+- **[MEDIUM] XSS in flash message** (`EmbeddedDnsManager.php`) — user-supplied zone name
+  was interpolated directly into the success flash message and stored in `$_SESSION`.
+  Fixed with `htmlspecialchars()` before flash storage.
+- **[MEDIUM] No record type allowlist** (`EmbeddedDnsManager.php`) — any string was
+  accepted as a DNS record type and forwarded to the API. Added an allowlist of 13 standard
+  types; invalid types throw `InvalidArgumentException` caught at both call sites.
+- **[MEDIUM] Unbounded BIND import payload** (`EmbeddedDnsManager.php`) — no size limit on
+  `$_POST['bind']` allowed memory-exhaustion DoS. Capped at 512 KB.
+- **[LOW] PII in module logs** (`shared/PanelDnsApi.php`) — `search=email@example.com` query
+  parameters appeared in the WHMCS module log. Added `redactUrl()` to strip `search`, `email`,
+  `token`, `key`, `password`, and `secret` params before logging.
+- **[LOW] Incomplete SSRF guard** (`shared/PanelDnsApi.php`) — `CURLOPT_IPRESOLVE_V4` was
+  set but the resolved IP was not verified after the connection. Added post-connect private-IP
+  check via `isPrivateIp()` covering RFC 1918, loopback, link-local, and RFC 6598 ranges.
+- **[LOW] `@session_start()` error suppression** (`EmbeddedDnsManager.php`) — suppressed
+  session misconfiguration errors that would silently disable CSRF protection. Replaced with
+  `session_status() === PHP_SESSION_NONE` guard on all four call sites.
+- **[LOW] Reactivation URL unescaped in error banner** (`shared/LicenceCheck.php`) — DB-sourced
+  URL included verbatim in the licence error string. Fixed with `htmlspecialchars()`.
+- **[LOW] SHA1 cache key** (`shared/PanelDnsApi.php`) — `identityHash()` used `sha1()`.
+  Replaced with `hash('sha256', …)`.
+- **[LOW] Exception messages in activity log** (`lib/PanelDnsResellerHooks.php`, `hooks.php`)
+  — raw exception messages (potentially containing PII or SQL fragments) were passed to
+  `logActivity()`. Replaced with `get_class($e)` only.
+
+All four `shared/` files synced to `paneldns-whmcs` (source of truth) as required by the
+ecosystem shared-file rule.
+
+---
+
 ## [1.2.0] — 2026-05-30
 
 ### Added

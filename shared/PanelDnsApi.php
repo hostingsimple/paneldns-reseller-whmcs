@@ -54,7 +54,8 @@ class PanelDnsApi
      */
     public function identityHash(): string
     {
-        return substr(sha1($this->baseUrl . '|' . $this->mode . '|' . $this->apiKey), 0, 16);
+        // SEC-L05: sha256 replaces sha1 (deprecated for crypto; belt-and-braces even for cache keys).
+        return substr(hash('sha256', $this->baseUrl . '|' . $this->mode . '|' . $this->apiKey), 0, 16);
     }
 
     // ── Generic HTTP ──────────────────────────────────────────────────────────
@@ -201,15 +202,22 @@ class PanelDnsApi
         $opts[CURLOPT_HTTPHEADER] = $headers;
 
         curl_setopt_array($ch, $opts);
-        $raw    = curl_exec($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err    = curl_error($ch);
+        $raw       = curl_exec($ch);
+        $status    = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $primaryIp = (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP);
+        $err       = curl_error($ch);
         curl_close($ch);
 
         $this->logCall($method, $url, $body, $status, $raw, $err);
 
         if ($err) {
             return ['ok' => false, 'status' => 0, 'data' => null, 'error' => $err];
+        }
+
+        // SEC-L02: belt-and-braces SSRF guard — block responses that resolved to a
+        // private/loopback IPv4 range even when CURLOPT_IPRESOLVE_V4 is set.
+        if ($primaryIp !== '' && self::isPrivateIp($primaryIp)) {
+            return ['ok' => false, 'status' => 0, 'data' => null, 'error' => 'SSRF guard: target resolved to a private IP address'];
         }
 
         $decoded = json_decode($raw ?: 'null', true);
@@ -228,11 +236,12 @@ class PanelDnsApi
         if (!function_exists('logModuleCall')) return;
 
         // Redact the API key from the URL (none in URL, only in header) — and from any logged body.
+        // SEC-L01: also strip PII query params (search/email) from the logged URL.
         $bodyRedacted = $this->redact($body ?? []);
 
         logModuleCall(
             'paneldns',
-            "{$method} {$url}",
+            "{$method} " . $this->redactUrl($url),
             $bodyRedacted,
             ['status' => $status, 'response' => $this->truncate($rawResponse, 4096), 'curl_error' => $curlError],
             null,
@@ -253,5 +262,41 @@ class PanelDnsApi
     {
         if ($s === null) return null;
         return strlen($s) > $max ? substr($s, 0, $max) . '…' : $s;
+    }
+
+    /**
+     * SEC-L01: strip known-PII and secret query-string parameters from a URL
+     * before it is written to the WHMCS module log.
+     */
+    private function redactUrl(string $url): string
+    {
+        return preg_replace(
+            '/([?&])(search|email|token|key|password|secret)=([^&]*)/i',
+            '$1$2=[REDACTED]',
+            $url
+        );
+    }
+
+    /**
+     * SEC-L02: return true if the IPv4 address falls within a private, loopback,
+     * link-local, or shared-address-space range (RFC 1918 / RFC 5735 / RFC 6598).
+     */
+    private static function isPrivateIp(string $ip): bool
+    {
+        $long = ip2long($ip);
+        if ($long === false) return true; // unparseable — block to be safe
+        foreach ([
+            ['10.0.0.0',    8],  // RFC 1918 private
+            ['172.16.0.0',  12], // RFC 1918 private
+            ['192.168.0.0', 16], // RFC 1918 private
+            ['127.0.0.0',   8],  // loopback
+            ['169.254.0.0', 16], // link-local
+            ['0.0.0.0',     8],  // "this" network
+            ['100.64.0.0',  10], // RFC 6598 shared address space
+        ] as [$subnet, $bits]) {
+            $mask = -1 << (32 - $bits);
+            if (($long & $mask) === (ip2long($subnet) & $mask)) return true;
+        }
+        return false;
     }
 }
