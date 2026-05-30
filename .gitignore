@@ -2,3 +2,5 @@ vendor/
 .env
 dist/
 *.zip
+
+.phpunit.cache/
