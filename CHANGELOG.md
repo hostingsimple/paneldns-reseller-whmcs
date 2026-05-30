@@ -4,6 +4,53 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.3.0] — 2026-05-30
+
+### Added
+
+- **`AdminSingleSignOn()` — proper portal redirect** — replaces the defunct "Open Portal
+  as Client" custom button with WHMCS's native `AdminSingleSignOnLabel` / `AdminSingleSignOn()`
+  mechanism. The admin now gets a dedicated "Login to PanelDNS as Client" link button in the
+  service detail page that mints a 60-second SSO token and redirects their browser directly
+  to the sub-client's authenticated portal session. The old custom button was broken — it
+  minted the token but discarded the URL.
+- **Nameserver card in client area** — the client overview page now permanently shows the
+  reseller's configured nameservers (or the org defaults) in a green card. Clients always see
+  "point your domains here" without needing to find the welcome email.
+- **"Resend Welcome Email" admin button** — new per-service custom button in the WHMCS admin
+  service detail page. Mints a fresh SSO token and re-sends the full welcome email. Useful
+  when a client deletes or never receives their original welcome email, or for clients who
+  were bulk-synced (who receive no welcome email automatically).
+- **`ListAccounts()` implementation** — the WHMCS "List Accounts / Sync" tool on the server
+  configuration page now works. Paginates through `/api/v1/sub-clients` (up to 5 000 accounts)
+  and returns them in WHMCS format. WHMCS compares the returned `uniqueIdentifier` values
+  against `tblhosting.dedicatedip` to surface orphaned or unprovisioned services.
+- **Client profile sync** — `ClientEdit` WHMCS hook pushes name and email changes to the
+  matching PanelDNS sub-client via `PATCH /api/v1/sub-clients/{id}`. Keeps both systems in
+  sync when clients update their profile. No-ops silently if the client has no PanelDNS service.
+- **WHMCS Configurable Options support** — `CreateAccount` and `ChangePackage` now check
+  `$params['configoptions']['Zone Limit']` and `$params['configoptions']['Max Records Per Zone']`
+  before falling back to product-level config options. Resellers can create WHMCS Configurable
+  Options with those exact names to let customers choose their zone limit at checkout.
+- **Zone list in admin service tab** — the admin service detail panel now shows the actual
+  zone names (up to 20) alongside the usage counts. Full list visible via the portal.
+- **Termination grace period** — new `configoption11` "Termination Grace Period (Days)"
+  (default 0 = immediate delete). When set > 0, `TerminateAccount` suspends the sub-client
+  instead of deleting it and stores a `[paneldns-grace:YYYY-MM-DD]` marker in the service
+  notes. The nightly `DailyCronJob` hook checks for expired markers and hard-deletes the
+  sub-client. Terminated services are already excluded from DriftSync so the suspension is
+  never reversed before deletion.
+
+### Changed
+
+- `resolveNameservers()` private helper extracted from `sendWelcomeEmail()` — used by
+  `sendWelcomeEmail()`, `resendWelcome()`, and the client area nameserver card. Single source
+  of truth for NS resolution logic.
+- `MetaData()`: `ListAccountsUniqueIdentifierField` corrected from `'serviceid'` to
+  `'dedicatedip'` (sub-client IDs are stored there, not in serviceid).
+
+---
+
 ## [1.2.1] — 2026-05-30
 
 ### Security

@@ -68,6 +68,31 @@ class PanelDnsResellerService
         }
     }
 
+    /**
+     * Resolve the nameserver list for this product/service.
+     * Prefers per-product NS overrides (configoption4-7); falls back to
+     * the org's configured nameservers from /api/v1/org/nameservers.
+     *
+     * @return string[] Array of NS hostnames, e.g. ['ns1.example.com', 'ns2.example.com']
+     */
+    private function resolveNameservers(): array
+    {
+        $overrides = array_values(array_filter([
+            trim((string) ($this->params['configoption4'] ?? '')),
+            trim((string) ($this->params['configoption5'] ?? '')),
+            trim((string) ($this->params['configoption6'] ?? '')),
+            trim((string) ($this->params['configoption7'] ?? '')),
+        ], fn ($v) => $v !== ''));
+
+        if (!empty($overrides)) return $overrides;
+
+        $ns = $this->api->nameservers();
+        if ($ns['ok'] && !empty($ns['data']['nameservers'])) {
+            return (array) $ns['data']['nameservers'];
+        }
+        return [];
+    }
+
     public function createAccount(): string
     {
         // P2.1: bundled-with-PanelDNS-subscription licence check. Only gates
@@ -86,12 +111,23 @@ class PanelDnsResellerService
         $clientName = trim(($this->params['clientsdetails']['firstname'] ?? '') . ' ' . ($this->params['clientsdetails']['lastname'] ?? ''));
         if ($clientName === '') $clientName = $this->params['clientsdetails']['email'] ?? 'unknown';
 
+        // CONF-01: WHMCS Configurable Options (per-order) take precedence over
+        // product-level config options so resellers can offer tiered plans at checkout.
+        // Set up a Configurable Option named exactly "Zone Limit" on the product to
+        // let customers choose at order time.
+        $zoneLimit  = !empty($this->params['configoptions']['Zone Limit'])
+            ? (int) $this->params['configoptions']['Zone Limit']
+            : (int) ($this->params['configoption1'] ?? 5);
+        $maxRecords = !empty($this->params['configoptions']['Max Records Per Zone'])
+            ? (int) $this->params['configoptions']['Max Records Per Zone']
+            : (int) ($this->params['configoption2'] ?? 100);
+
         $resp = $this->api->createSubClient([
             'name'        => $clientName,
             'email'       => $this->params['clientsdetails']['email'] ?? '',
             'password'    => $this->params['password'] ?: bin2hex(random_bytes(12)),
-            'zone_limit'  => (int) ($this->params['configoption1'] ?? 5),
-            'max_records' => (int) ($this->params['configoption2'] ?? 100),
+            'zone_limit'  => $zoneLimit,
+            'max_records' => $maxRecords,
             'status'      => 'active',
         ]);
 
@@ -129,6 +165,25 @@ class PanelDnsResellerService
     {
         $id = $this->subClientId();
         if (!$id) return 'success';
+
+        $graceDays = (int) ($this->params['configoption11'] ?? 0);
+
+        if ($graceDays > 0) {
+            // GRACE-01: suspend instead of delete. DailyCronJob processes the
+            // actual deletion once the deadline passes. Terminated WHMCS services
+            // are excluded from DriftSync so the suspension is not reversed.
+            $resp = $this->api->patchSubClient($id, ['status' => 'suspended']);
+            if (!$resp['ok']) return $resp['error'] ?: 'Grace-period suspend failed.';
+
+            $deadline = date('Y-m-d', strtotime("+{$graceDays} days"));
+            try {
+                \WHMCS\Database\Capsule::table('tblhosting')
+                    ->where('id', (int) ($this->params['serviceid'] ?? 0))
+                    ->update(['notes' => "[paneldns-grace:{$deadline}]"]);
+            } catch (\Throwable $e) { /* swallow — grace still applied in PanelDNS */ }
+            return 'success';
+        }
+
         $resp = $this->api->deleteSubClient($id);
         return $resp['ok'] ? 'success' : ($resp['error'] ?: 'Terminate failed.');
     }
@@ -138,9 +193,17 @@ class PanelDnsResellerService
         $id = $this->subClientId();
         if (!$id) return 'No sub-client id.';
 
+        // CONF-01: honour Configurable Options if set (see createAccount).
+        $zoneLimit  = !empty($this->params['configoptions']['Zone Limit'])
+            ? (int) $this->params['configoptions']['Zone Limit']
+            : (int) ($this->params['configoption1'] ?? 5);
+        $maxRecords = !empty($this->params['configoptions']['Max Records Per Zone'])
+            ? (int) $this->params['configoptions']['Max Records Per Zone']
+            : (int) ($this->params['configoption2'] ?? 100);
+
         $resp = $this->api->patchSubClient($id, [
-            'zone_limit'  => (int) ($this->params['configoption1'] ?? 5),
-            'max_records' => (int) ($this->params['configoption2'] ?? 100),
+            'zone_limit'  => $zoneLimit,
+            'max_records' => $maxRecords,
         ]);
         return $resp['ok'] ? 'success' : ($resp['error'] ?: 'ChangePackage failed.');
     }
@@ -165,6 +228,109 @@ class PanelDnsResellerService
         if (!$id) return 'No sub-client id.';
         $resp = $this->api->subClientSummary($id);
         return $resp['ok'] ? 'success' : ($resp['error'] ?: '');
+    }
+
+    /**
+     * AdminSingleSignOn — mint a portal SSO token and return a redirect URL.
+     * WHMCS calls this when the admin clicks the SSO button on the service page
+     * and redirects the admin's browser to the returned URL.
+     *
+     * @return array{success: bool, redirectUrl?: string, errorMsg?: string}
+     */
+    public static function adminSso(array $params): array
+    {
+        try {
+            $svc = new self($params);
+            $id  = $svc->subClientId();
+            if (!$id) {
+                return ['success' => false, 'errorMsg' => 'Service not provisioned yet.'];
+            }
+
+            $resp = $svc->api->mintSubClientSsoToken($id);
+            if (!$resp['ok'] || empty($resp['data']['login_url'])) {
+                return ['success' => false, 'errorMsg' => $resp['error'] ?? 'SSO token mint failed.'];
+            }
+
+            return ['success' => true, 'redirectUrl' => $resp['data']['login_url']];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'errorMsg' => 'paneldns-reseller: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * Resend the welcome email with a fresh 60-second SSO link.
+     * Triggered by the "Resend Welcome Email" admin custom button.
+     * Uses the same send path as the post-CreateAccount welcome email.
+     */
+    public function resendWelcome(): string
+    {
+        $id = $this->subClientId();
+        if (!$id) return 'Service not provisioned — cannot send welcome email.';
+
+        $sso = $this->api->mintSubClientSsoToken($id);
+        if (!$sso['ok'] || empty($sso['data']['login_url'])) {
+            return 'SSO mint failed: ' . ($sso['error'] ?? 'unknown');
+        }
+
+        $context = [];
+        $sum = $this->api->summary();
+        if ($sum['ok']) {
+            $context['portal_url'] = $sum['data']['links']['portal'] ?? '';
+            $context['org_slug']   = $sum['data']['org']['slug'] ?? '';
+        }
+
+        $ns = $this->resolveNameservers();
+        if (!empty($ns)) $context['nameservers'] = implode("\n", $ns);
+
+        $soaEmail = trim((string) ($this->params['configoption8'] ?? ''));
+        if ($soaEmail !== '') $context['soa_email'] = $soaEmail;
+
+        PanelDnsWelcomeMail::sendReseller((int) $this->params['serviceid'], $sso['data'], $context);
+        return 'success';
+    }
+
+    /**
+     * ListAccounts — return all sub-clients on this server for WHMCS sync.
+     * Paginates through /api/v1/sub-clients (100 per page, max 50 pages = 5 000).
+     * WHMCS compares the returned uniqueIdentifier values against tblhosting.dedicatedip
+     * to surface orphaned or unprovisioned services via the Sync tool.
+     */
+    public static function listAccounts(array $params): array
+    {
+        try {
+            $svc      = new self($params);
+            $accounts = [];
+            $page     = 1;
+            $perPage  = 100;
+
+            while ($page <= 50) {
+                $resp = $svc->api->get('/api/v1/sub-clients', ['page' => $page, 'per_page' => $perPage]);
+                if (!$resp['ok']) {
+                    // First page failure → hard error; later pages → return partial.
+                    return $page === 1
+                        ? ['success' => false, 'error' => $resp['error'] ?? 'API request failed']
+                        : ['success' => true, 'accounts' => $accounts];
+                }
+
+                $items = is_array($resp['data']) ? $resp['data'] : [];
+                foreach ($items as $sc) {
+                    $accounts[] = [
+                        'username'         => $sc['email'] ?? '',
+                        'domain'           => $sc['name']  ?? ($sc['email'] ?? ''),
+                        'uniqueIdentifier' => (string) ($sc['id'] ?? ''),
+                        'package'          => 'Zones: ' . ($sc['zone_limit'] ?? '?'),
+                        'suspended'        => ($sc['status'] ?? '') === 'suspended',
+                    ];
+                }
+
+                if (count($items) < $perPage) break; // last page
+                $page++;
+            }
+
+            return ['success' => true, 'accounts' => $accounts];
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => 'ListAccounts failed: ' . get_class($e)];
+        }
     }
 
     /**
@@ -436,6 +602,20 @@ class PanelDnsResellerService
             ? htmlspecialchars((string) $lastSync, ENT_QUOTES, 'UTF-8')
             : '<span style="color:#9ca3af;">—</span>';
 
+        // ZONE-LIST-01: fetch up to 20 zone names for this sub-client.
+        $zoneNames = '<span style="color:#9ca3af;">—</span>';
+        $zonesResp = $svc->api->get('/api/v1/zones', ['sub_client_id' => $id, 'per_page' => 20]);
+        if ($zonesResp['ok'] && !empty($zonesResp['data'])) {
+            $names = array_map(
+                fn ($z) => htmlspecialchars((string) ($z['name'] ?? ''), ENT_QUOTES, 'UTF-8'),
+                $zonesResp['data']
+            );
+            $zoneNames = implode('<br>', $names);
+            if (count($names) >= 20) {
+                $zoneNames .= '<br><em style="color:#9ca3af;font-size:11px;">… and more</em>';
+            }
+        }
+
         return [
             'Module version'         => '<span style="color:#6b7280;font-variant-numeric:tabular-nums;">paneldns-reseller v'
                 . htmlspecialchars($moduleVersion, ENT_QUOTES, 'UTF-8') . '</span>',
@@ -449,6 +629,7 @@ class PanelDnsResellerService
             'Zones used / limit'     => sprintf('%d / %s', $zonesUsed, $zonesLimit > 0 ? $zonesLimit : '∞') . $zoneBar,
             'Records used / limit'   => sprintf('%d / %s', $recsUsed, $recsLimit > 0 ? $recsLimit : '∞') . $recsBar,
             'Last sync'              => $lastSyncDisplay,
+            'Zones'                  => $zoneNames,
             'Server'                 => htmlspecialchars(
                 ($svc->params['serverhostname'] ?? ''),
                 ENT_QUOTES,
@@ -485,10 +666,11 @@ class PanelDnsResellerService
         $vars = [
             'paneldns_sub_client_id' => $params['customfields']['paneldns_sub_client_id']
                 ?? $params['model']?->dedicatedip,
-            'paneldns_status' => 'unknown',
-            'paneldns_usage'  => null,
-            'paneldns_limits' => null,
-            'paneldns_error'  => null,
+            'paneldns_status'      => 'unknown',
+            'paneldns_usage'       => null,
+            'paneldns_limits'      => null,
+            'paneldns_error'       => null,
+            'paneldns_nameservers' => [], // NS-01: populated below once API is available
         ];
 
         $svc = new self($params);
@@ -520,9 +702,11 @@ class PanelDnsResellerService
             }
         }
 
-        $vars['paneldns_status'] = $data['sub_client']['status'] ?? 'unknown';
-        $vars['paneldns_usage']  = $data['usage'] ?? null;
-        $vars['paneldns_limits'] = $data['limits'] ?? null;
+        $vars['paneldns_status']      = $data['sub_client']['status'] ?? 'unknown';
+        $vars['paneldns_usage']       = $data['usage'] ?? null;
+        $vars['paneldns_limits']      = $data['limits'] ?? null;
+        // NS-01: always show nameservers so clients know where to point their domains.
+        $vars['paneldns_nameservers'] = $svc->resolveNameservers();
 
         // Feature 6 — zone health widget: fetch up to 20 zones and surface
         // only the ones that are NOT active so the client sees problems first.
@@ -569,24 +753,11 @@ class PanelDnsResellerService
             $context['org_slug']   = $sum['data']['org']['slug'] ?? '';
         }
 
-        // T2.3: prefer per-product NS overrides (configoption4-7) when set;
-        // otherwise fall back to the org's configured nameservers via
-        // /api/v1/org/nameservers. Useful when the same reseller org sells
-        // under multiple WHMCS brands and each brand shows a different NS.
-        $overrideNs = array_values(array_filter([
-            trim((string) ($this->params['configoption4'] ?? '')),
-            trim((string) ($this->params['configoption5'] ?? '')),
-            trim((string) ($this->params['configoption6'] ?? '')),
-            trim((string) ($this->params['configoption7'] ?? '')),
-        ], fn ($v) => $v !== ''));
-
-        if (!empty($overrideNs)) {
-            $context['nameservers'] = implode("\n", $overrideNs);
-        } else {
-            $ns = $this->api->nameservers();
-            if ($ns['ok'] && !empty($ns['data']['nameservers'])) {
-                $context['nameservers'] = implode("\n", $ns['data']['nameservers']);
-            }
+        // T2.3 / NS-01: resolveNameservers() prefers per-product overrides
+        // (configoption4-7) and falls back to /api/v1/org/nameservers.
+        $ns = $this->resolveNameservers();
+        if (!empty($ns)) {
+            $context['nameservers'] = implode("\n", $ns);
         }
 
         // SOA email override (configoption8) — passed through as merge field

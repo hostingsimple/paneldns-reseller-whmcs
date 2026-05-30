@@ -87,3 +87,45 @@ add_hook('AddonSuspended', 1, function (array $vars) {
 add_hook('AddonTerminated', 1, function (array $vars) {
     PanelDnsResellerHooks::onAddonChange((int) ($vars['serviceid'] ?? 0), (int) ($vars['addonid'] ?? 0), -1);
 });
+
+/**
+ * CLIENT-SYNC-01: push WHMCS client profile changes to PanelDNS.
+ * Fires whenever any client field is updated (admin area or client portal).
+ * Fetches current values from tblclients rather than trusting hook vars alone.
+ */
+add_hook('ClientEdit', 1, function (array $vars) {
+    $userId = (int) ($vars['userid'] ?? 0);
+    if ($userId <= 0) return;
+    try {
+        $client = \WHMCS\Database\Capsule::table('tblclients')
+            ->where('id', $userId)
+            ->select(['firstname', 'lastname', 'email'])
+            ->first();
+        if (!$client) return;
+        PanelDnsResellerHooks::onClientEdit(
+            $userId,
+            (string) $client->firstname,
+            (string) $client->lastname,
+            (string) $client->email
+        );
+    } catch (\Throwable $e) {
+        if (function_exists('logActivity')) {
+            // SEC-L06: class only, no raw exception message
+            logActivity('PanelDNS ClientEdit hook crashed: ' . get_class($e));
+        }
+    }
+});
+
+/**
+ * GRACE-02: nightly job to hard-delete sub-clients whose grace period has elapsed.
+ * Runs alongside the drift sync cron — both are idempotent so ordering doesn't matter.
+ */
+add_hook('DailyCronJob', 1, function () {
+    try {
+        PanelDnsResellerHooks::processExpiredGracePeriods();
+    } catch (\Throwable $e) {
+        if (function_exists('logActivity')) {
+            logActivity('PanelDNS grace period cron crashed: ' . get_class($e));
+        }
+    }
+});

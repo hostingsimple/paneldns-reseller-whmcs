@@ -69,6 +69,23 @@
         </div>
     {/if}
 
+    {* NS-01 — Nameserver card: always visible so clients know where to point domains. *}
+    {if $paneldns_nameservers && $paneldns_nameservers|count > 0}
+    <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:16px; margin-top:12px;">
+        <div style="font-size:12px; font-weight:600; color:#166534; text-transform:uppercase; letter-spacing:.05em; margin-bottom:8px;">
+            &#x1F310; Your Nameservers
+        </div>
+        <p style="margin:0 0 10px; font-size:13px; color:#374151;">
+            Point your domains to these nameservers at your registrar to activate DNS.
+        </p>
+        {foreach from=$paneldns_nameservers item=ns}
+        <div style="font-family:monospace; font-size:14px; font-weight:600; color:#111827; padding:5px 0; border-bottom:1px solid #dcfce7; display:flex; align-items:center; gap:8px;">
+            <span>{$ns|escape}</span>
+        </div>
+        {/foreach}
+    </div>
+    {/if}
+
     {* Feature 6 — Zone health widget: surfaces zones that are not active. *}
     {if $paneldns_zones_health && $paneldns_zones_health|count > 0}
         <div style="background:#fff; border:1px solid #fbbf24; border-radius:10px; padding:16px; margin-top:12px;">

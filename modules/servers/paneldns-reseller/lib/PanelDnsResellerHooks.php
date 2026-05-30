@@ -192,6 +192,115 @@ class PanelDnsResellerHooks
     }
 
     /**
+     * CLIENT-SYNC-01: push name/email changes from WHMCS to PanelDNS.
+     *
+     * Called from the ClientEdit hook whenever a WHMCS client's profile is
+     * updated. Finds the client's active paneldns-reseller service and PATCHes
+     * the sub-client record. Silently no-ops if the client has no PanelDNS service.
+     */
+    public static function onClientEdit(int $userId, string $firstName, string $lastName, string $email): void
+    {
+        if ($userId <= 0) return;
+
+        try {
+            $service = \WHMCS\Database\Capsule::table('tblhosting')
+                ->join('tblservers',  'tblhosting.server',    '=', 'tblservers.id')
+                ->join('tblproducts', 'tblhosting.packageid', '=', 'tblproducts.id')
+                ->where('tblhosting.userid', $userId)
+                ->whereIn('tblhosting.domainstatus', ['Active', 'Suspended'])
+                ->where('tblproducts.servertype', 'paneldns_reseller')
+                ->select([
+                    'tblhosting.dedicatedip as sub_client_id',
+                    'tblservers.hostname as server_hostname',
+                    'tblservers.accesshash as server_key',
+                    'tblservers.secure as server_secure',
+                    'tblservers.port as server_port',
+                ])
+                ->first();
+
+            if (!$service) return;
+
+            $subClientId = (int) $service->sub_client_id;
+            if ($subClientId <= 0) return;
+
+            $name = trim("{$firstName} {$lastName}");
+            $patch = array_filter([
+                'name'  => $name !== '' ? $name : null,
+                'email' => $email !== '' ? $email : null,
+            ], fn ($v) => $v !== null);
+
+            if (empty($patch)) return;
+
+            self::apiForServer($service)->patchSubClient($subClientId, $patch);
+        } catch (\Throwable $e) {
+            logActivity('PanelDNS client sync error (' . get_class($e) . ')');
+        }
+    }
+
+    /**
+     * GRACE-02: delete sub-clients whose grace period has expired.
+     *
+     * Runs nightly from the DailyCronJob hook. Looks for Terminated WHMCS
+     * services with a [paneldns-grace:YYYY-MM-DD] marker in tblhosting.notes
+     * where the deadline date is today or in the past, then hard-deletes the
+     * sub-client and clears the marker.
+     *
+     * Terminated WHMCS services are excluded from DriftSync, so the suspended
+     * sub-client is never accidentally re-activated before deletion.
+     */
+    public static function processExpiredGracePeriods(): void
+    {
+        $today = date('Y-m-d');
+
+        try {
+            $services = \WHMCS\Database\Capsule::table('tblhosting')
+                ->join('tblservers', 'tblhosting.server', '=', 'tblservers.id')
+                ->where('tblhosting.domainstatus', 'Terminated')
+                ->where('tblhosting.notes', 'like', '[paneldns-grace:%')
+                ->select([
+                    'tblhosting.id as service_id',
+                    'tblhosting.dedicatedip as sub_client_id',
+                    'tblhosting.notes',
+                    'tblservers.hostname as server_hostname',
+                    'tblservers.accesshash as server_key',
+                    'tblservers.secure as server_secure',
+                    'tblservers.port as server_port',
+                ])
+                ->get();
+
+            foreach ($services as $svc) {
+                if (!preg_match('/\[paneldns-grace:(\d{4}-\d{2}-\d{2})\]/', (string) $svc->notes, $m)) {
+                    continue;
+                }
+                if ($m[1] > $today) continue; // not yet expired
+
+                $subClientId = (int) $svc->sub_client_id;
+                if ($subClientId > 0) {
+                    try {
+                        self::apiForServer($svc)->deleteSubClient($subClientId);
+                    } catch (\Throwable $e) {
+                        logActivity('PanelDNS grace delete failed for service #' . $svc->service_id
+                            . ' (' . get_class($e) . ')');
+                        continue; // leave marker in place so the next cron retries
+                    }
+                }
+
+                // Clear the grace marker to prevent double-processing.
+                try {
+                    \WHMCS\Database\Capsule::table('tblhosting')
+                        ->where('id', $svc->service_id)
+                        ->update(['notes' => '']);
+                } catch (\Throwable $e) { /* swallow */ }
+
+                logActivity("PanelDNS: grace period expired, deleted sub-client {$subClientId}"
+                    . " (service #{$svc->service_id})");
+            }
+        } catch (\Throwable $e) {
+            logActivity('PanelDNS grace period cron error (' . get_class($e) . ')');
+        }
+    }
+
+    /**
      * Build a reseller-mode PanelDnsApi from a joined server row.
      * Expects ->server_hostname, ->server_key (encrypted accesshash),
      * ->server_secure, ->server_port.

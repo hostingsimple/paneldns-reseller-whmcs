@@ -31,7 +31,7 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '1.2.0');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.3.0');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';
@@ -43,8 +43,14 @@ function paneldns_reseller_MetaData(): array
         'DisplayName'                              => 'PanelDNS (Reseller — Sub-client DNS Hosting)',
         'APIVersion'                               => '1.1',
         'RequiresServer'                           => true,
+        // Adds a "Login to PanelDNS as Client" link button in the admin
+        // service detail page that redirects the admin's browser to the
+        // sub-client's authenticated portal session via SSO.
+        'AdminSingleSignOnLabel'                   => 'Login to PanelDNS as Client',
         'ListAccountsUniqueIdentifierDisplayName'  => 'PanelDNS Sub-client ID',
-        'ListAccountsUniqueIdentifierField'        => 'serviceid',
+        // Sub-client IDs are stored in tblhosting.dedicatedip — this tells
+        // WHMCS which service field to compare against ListAccounts results.
+        'ListAccountsUniqueIdentifierField'        => 'dedicatedip',
     ];
 }
 
@@ -113,6 +119,13 @@ function paneldns_reseller_ConfigOptions(): array
             'Default'     => 'no',
             'Description' => 'When a domain is deleted or expires, remove the DNS zone. Disabled by default — enable only if you are sure clients do not need the zone data.',
         ],
+        // configoption11 — GRACE-01
+        'Termination Grace Period (Days)' => [
+            'Type'        => 'text',
+            'Size'        => 4,
+            'Default'     => '0',
+            'Description' => 'Days to wait before permanently deleting the sub-client after a WHMCS termination. 0 = delete immediately (default). During the grace period the sub-client is suspended in PanelDNS and removed nightly once the period expires.',
+        ],
     ];
 }
 
@@ -144,9 +157,11 @@ function paneldns_reseller_ChangePackage(array $params): string
 function paneldns_reseller_AdminCustomButtonArray(): array
 {
     return [
-        'Test Connection'        => 'testConnection',
-        'Open Portal as Client'  => 'openPortal',
-        'Resync Status'          => 'resyncStatus',
+        'Test Connection'      => 'testConnection',
+        'Resend Welcome Email' => 'resendWelcome',
+        'Resync Status'        => 'resyncStatus',
+        // "Login to PanelDNS as Client" is now handled by AdminSingleSignOn()
+        // which provides a proper browser redirect rather than a custom button.
     ];
 }
 
@@ -190,6 +205,39 @@ function paneldns_reseller_resyncStatus(array $params): string
 function paneldns_reseller_AdminServicesTabFields(array $params): array
 {
     return PanelDnsResellerService::adminServicesTabFields($params);
+}
+
+/**
+ * AdminSingleSignOn — WHMCS calls this when the admin clicks
+ * "Login to PanelDNS as Client" in the service detail page.
+ * Mints a 60-second SSO token and redirects the admin's browser
+ * to the sub-client's authenticated portal session.
+ *
+ * @return array{success: bool, redirectUrl?: string, errorMsg?: string}
+ */
+function paneldns_reseller_AdminSingleSignOn(array $params): array
+{
+    return PanelDnsResellerService::adminSso($params);
+}
+
+/**
+ * Re-send the welcome email with a fresh SSO link. Useful when the
+ * original email was lost, expired, or the client was bulk-synced
+ * without a welcome email being sent.
+ */
+function paneldns_reseller_resendWelcome(array $params): string
+{
+    return PanelDnsResellerService::run('resendWelcome', $params);
+}
+
+/**
+ * ListAccounts — returns all sub-clients on this server so WHMCS can
+ * cross-reference provisioned accounts against its service records and
+ * surface any orphaned or mismatched services via the Sync tool.
+ */
+function paneldns_reseller_ListAccounts(array $params): array
+{
+    return PanelDnsResellerService::listAccounts($params);
 }
 
 function paneldns_reseller_ClientArea(array $params): array
