@@ -31,7 +31,7 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '1.3.1');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.4.0');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';

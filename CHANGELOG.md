@@ -4,6 +4,42 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.4.0] — 2026-05-30
+
+### Fixed — Critical
+
+- **Release ZIP was broken** — the GitHub Actions workflow was zipping raw source
+  files without copying `shared/*.php` into `lib/`. Any install from a release tag
+  would fatal immediately on `require_once __DIR__ . '/LicenceCheck.php'` because
+  that file was never in `lib/`. A new `build.php` (mirroring the platform repo's
+  approach) now copies all four shared files into `lib/` before zipping. The
+  `lib/PanelDnsApi.php` test stub committed in v1.3.1 is removed from tracking and
+  gitignored — `build.php` places the real file there at build time.
+
+### Added
+
+- **`build.php`** — copies `shared/*.php` into `lib/`, produces
+  `dist/paneldns-reseller-whmcs-{VERSION}.zip`. Run locally with
+  `php build.php` or `RELEASE_VERSION=1.4.0 php build.php`.
+- **`SMOKE-TEST.md`** — 14-step post-install verification checklist covering
+  connectivity, provisioning, welcome email, client area SSO, record CRUD,
+  ListAccounts sync, suspend/terminate, and module log hygiene.
+- **`workflow_dispatch`** trigger in GitHub Actions release workflow — enables
+  manual re-builds without pushing a new tag.
+- **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`** env var in CI workflow — suppresses
+  GitHub Actions Node.js deprecation warnings.
+- **`.github/dependabot.yml`** — weekly Dependabot updates for Composer
+  dependencies and GitHub Actions versions.
+
+### Changed
+
+- GitHub Actions `release.yml` updated to use `build.php` instead of raw `zip`
+  command, ensuring shared files are present in every release ZIP.
+- `.gitignore` updated: `lib/PanelDnsApi.php`, `lib/LicenceCheck.php`,
+  `lib/DriftSync.php`, `lib/WelcomeMail.php` are now ignored (build artefacts).
+
+---
+
 ## [1.3.1] — 2026-05-30
 
 ### Fixed

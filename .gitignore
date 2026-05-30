@@ -4,3 +4,10 @@ dist/
 *.zip
 
 .phpunit.cache/
+
+# build.php copies shared/*.php into lib/ at build time.
+# These copies are NOT committed — the repo holds only the originals in shared/.
+modules/servers/paneldns-reseller/lib/PanelDnsApi.php
+modules/servers/paneldns-reseller/lib/LicenceCheck.php
+modules/servers/paneldns-reseller/lib/DriftSync.php
+modules/servers/paneldns-reseller/lib/WelcomeMail.php
