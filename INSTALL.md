@@ -79,7 +79,7 @@ The "server" in WHMCS represents your connection to the PanelDNS API.
    | Field | What to enter |
    |---|---|
    | **Name** | Anything descriptive, e.g. `PanelDNS` |
-   | **Hostname** | Your PanelDNS domain, e.g. `app.paneldns.com` — no `https://`, no trailing slash |
+   | **Hostname** | The API domain — see note below |
    | **Secure** | ☑ Tick this (uses HTTPS) |
    | **Username** | Leave blank |
    | **Password** | Leave blank |
@@ -88,6 +88,36 @@ The "server" in WHMCS represents your connection to the PanelDNS API.
 
 4. Click **Save Changes**
 5. Click **Test Connection** — you should see a success message. If not, see [Troubleshooting](#troubleshooting).
+
+### Choosing your hostname
+
+The hostname is the domain the module uses for API calls (`/api/v1/*`). It is
+**not** the portal your clients log in to — that is configured separately inside
+PanelDNS. You have two options:
+
+**Option A — Use the platform domain (simplest)**
+
+Enter the domain your PanelDNS provider gave you, e.g. `app.paneldns.com`.
+This always works and requires no additional setup.
+
+**Option B — Use your white-label portal domain (fully branded)**
+
+If you have set up a custom portal domain in PanelDNS (e.g. `dns.yourbrand.com`),
+you can use that domain here instead. The API runs on the same application and
+responds identically from any domain that resolves to the server.
+
+Requirements:
+- The domain must already be configured as your portal domain in **PanelDNS →
+  Settings → Portal Domain** before you enter it here. PanelDNS issues a TLS
+  certificate for custom domains at that point — if the domain is not yet
+  registered there, HTTPS will fail.
+- DNS for the domain must point at the PanelDNS server (A/CNAME record).
+
+With Option B, your WHMCS configuration contains no reference to the underlying
+platform provider — your clients and your own admin setup see only your brand.
+
+> **Note:** the hostname controls only where WHMCS sends API requests. It has
+> no effect on the URL your sub-clients see when they log in to the portal.
 
 ---
 
