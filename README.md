@@ -13,25 +13,34 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 | Client orders product | Sub-client created in PanelDNS, welcome email sent with portal login |
 | Admin suspends service | Sub-client suspended in PanelDNS |
 | Admin unsuspends | Sub-client re-activated |
-| Admin terminates | Sub-client deleted from PanelDNS |
+| Admin terminates | Sub-client deleted (or suspended for a configurable grace period) |
 | Admin changes package | Zone and record limits updated |
+| Client updates profile | Name and email synced to PanelDNS automatically |
 
 ### Additional features
 
 - **Embedded DNS manager** — clients manage their zones and records directly inside
   the WHMCS client area without leaving your billing portal
+- **Nameserver card** — the client area always shows the nameservers clients need to
+  set at their registrar, so they never need to dig through old welcome emails
 - **Auto-create DNS zones** — when a domain is registered or transferred through
   WHMCS, a matching DNS zone is created automatically in PanelDNS
 - **Addon products for extra zones** — sell "PanelDNS +10 Zones" addons; activation
   raises the sub-client's zone limit, suspension lowers it back
 - **Live usage panel** — the admin service detail page shows zones/records used vs
-  limit with colour-coded progress bars
+  limit with colour-coded progress bars and the actual zone names
 - **Zone health widget** — clients see any non-active zones flagged at the top of
   their client area so they spot problems immediately
-- **Bulk sub-client sync** — a server-level button lets you provision all existing
-  WHMCS clients in one run; idempotent (safe to run multiple times)
+- **Bulk sub-client sync** — a server-level button provisions all existing WHMCS
+  clients in one run; idempotent (safe to re-run at any time)
 - **Daily drift sync** — a background job keeps WHMCS and PanelDNS statuses in sync
   and catches any divergence between the two systems
+- **Client profile sync** — name and email changes in WHMCS are automatically pushed
+  to PanelDNS so both systems stay consistent
+- **WHMCS Sync / ListAccounts** — the WHMCS server Sync tool works out of the box;
+  use it to surface orphaned or unprovisioned services
+- **Termination grace period** — optionally suspend a sub-client for N days before
+  hard-deleting, giving you time to recover accidental cancellations
 
 ---
 
@@ -67,13 +76,21 @@ are available:
 
 | Option | Default | Description |
 |---|---|---|
-| Zone Limit | 5 | Maximum DNS zones this sub-client can create. 0 = inherit org plan limit. |
-| Max Records Per Zone | 100 | Maximum DNS records per zone. 0 = inherit org plan limit. |
+| Zone Limit | 5 | Maximum DNS zones this sub-client can create. 0 = inherit org plan limit. Can be overridden per-order using a WHMCS Configurable Option named `Zone Limit`. |
+| Max Records Per Zone | 100 | Maximum DNS records per zone. 0 = inherit org plan limit. Can be overridden per-order using a WHMCS Configurable Option named `Max Records Per Zone`. |
 | Send Welcome Email | Yes | Email the client a portal login link and nameserver details on provisioning. |
-| NS1–NS4 Hostname | *(blank)* | Override the nameservers shown in the welcome email for this product (white-label branding). Leave blank to use the org's default nameservers. |
+| NS1–NS4 Hostname | *(blank)* | Override the nameservers shown in the welcome email and client area for this product (white-label branding). Leave blank to use the org's default nameservers. |
 | SOA Email | *(blank)* | Override the SOA contact email shown in the welcome email. |
 | Auto-Create Zone on Domain Order | Yes | Automatically create a DNS zone when the client registers or transfers a domain. |
 | Auto-Delete Zone on Domain Expiry | No | Remove the DNS zone when a domain is deleted. Disabled by default. |
+| Termination Grace Period (Days) | 0 | Days to wait before permanently deleting the sub-client after termination. 0 = delete immediately. Sub-client is suspended during the grace period and hard-deleted nightly once it expires. |
+
+### Per-order zone limits with WHMCS Configurable Options
+
+To let customers choose their zone limit at checkout, create a WHMCS Configurable
+Option on the product named exactly `Zone Limit` with the desired values (e.g.
+5 / 10 / 25). The module checks for this option first and falls back to the
+product-level Zone Limit only if it is not set.
 
 ---
 
@@ -81,10 +98,11 @@ are available:
 
 **Per-service** (visible on each individual service in WHMCS Admin):
 
-| Button | What it does |
+| Button / link | What it does |
 |---|---|
+| **Login to PanelDNS as Client** *(link)* | Mints a 60-second SSO token and redirects the admin's browser to the sub-client's authenticated portal session |
 | Test Connection | Verifies API connectivity for this service's server |
-| Open Portal as Client | Mints a 60-second SSO link and logs into the PanelDNS portal as this sub-client |
+| Resend Welcome Email | Mints a fresh SSO token and re-sends the full welcome email to the client |
 | Resync Status | Pulls the latest sub-client summary from PanelDNS and refreshes the admin tab |
 
 **Server-level** (visible on the WHMCS Server configuration page):
@@ -92,6 +110,7 @@ are available:
 | Button | What it does |
 |---|---|
 | Bulk Sync Sub-clients | Provisions or links all Active/Suspended services on this server to PanelDNS sub-clients in one run |
+| List Accounts / Sync | Built-in WHMCS tool — compares all sub-clients returned by the module against WHMCS services to surface orphaned or unprovisioned accounts |
 
 ---
 
