@@ -1,157 +1,310 @@
-# Installation — paneldns-whmcs
+# Installation Guide — PanelDNS Reseller Module for WHMCS
 
-## 1. Choose your module(s)
+This guide walks you through installing and configuring the PanelDNS Reseller module
+so your WHMCS clients can order DNS hosting as a product.
 
-| If you are… | Install |
-|---|---|
-| The operator running a PanelDNS SaaS, selling reseller accounts via WHMCS | **paneldns-platform** |
-| A reseller with a PanelDNS account, selling DNS hosting to your own customers via WHMCS | **paneldns-reseller** |
-| **Anyone with either of the above** — want cross-service admin tools (health check, orphan finder, activity log) | **paneldns-whmcs-addon** (optional but recommended) |
+---
 
-A single WHMCS install can host both server modules plus the addon. Install whichever ZIPs you need.
+## Before you start
 
-### Activating the addon module
+You need:
+- A **PanelDNS reseller account** — sign up at [paneldns.com](https://paneldns.com)
+- **WHMCS 8.7+** with admin access
+- **PHP 8.2+** on your WHMCS server
+- The `curl` and `json` PHP extensions (standard on every modern WHMCS host)
 
-After dropping `paneldns-whmcs-addon-*.zip` contents into your WHMCS:
+---
 
-1. **WHMCS Admin → System Settings → Addon Modules**
-2. Find **PanelDNS** in the list, click **Activate**
-3. Click **Configure**, set:
-   - **Reactivation URL** — your customer billing portal URL (e.g. `https://your-paneldns/billing`). Shown when a reseller's PanelDNS subscription lapses.
-   - **Health cache TTL** — leave at 60s default
-   - **Service-list cache TTL** — leave at 120s default
-4. Set Access Control for the admin roles that should see PanelDNS tools (Full Administrator by default)
-5. The tab appears at **Addons → PanelDNS** in the top admin nav
+## Step 1 — Generate a PanelDNS API token
 
-## 2. Drop in the files
+The module authenticates to PanelDNS using a Sanctum Bearer token scoped to your
+reseller org. Never share this token.
 
-Extract the ZIP into your WHMCS install. The structure already matches:
+1. Log in to your PanelDNS reseller dashboard
+2. Go to **API Tokens** in the sidebar
+3. Click **Create Token**
+4. Give it a name, e.g. `WHMCS Module`
+5. Select these scopes:
+   - `sub_clients:read`
+   - `sub_clients:write`
+   - `zones:read`
+   - `zones:write` *(required for auto-zone creation)*
+6. Click **Create** — copy the token shown. **It is only displayed once.**
+
+> Store the token somewhere safe (e.g. your password manager). If you lose it,
+> revoke the old one and create a new one — existing provisioned clients are
+> unaffected.
+
+---
+
+## Step 2 — Download and install the module files
+
+1. Go to the [Releases page](https://github.com/Veeau/paneldns-reseller-whmcs/releases)
+2. Download the latest `paneldns-reseller-whmcs-vX.X.X.zip`
+3. Extract the ZIP — it contains a `modules/` folder
+4. Copy the `modules/` folder into your WHMCS root directory
+
+The final path should be:
 
 ```
 <whmcs-root>/
 └── modules/
     └── servers/
-        └── paneldns-platform/        ← (or paneldns-reseller)
+        └── paneldns-reseller/
+            ├── paneldns-reseller.php
+            ├── hooks.php
+            └── lib/
+                ├── PanelDnsResellerService.php
+                ├── PanelDnsApi.php
+                ├── EmbeddedDnsManager.php
+                ├── PanelDnsResellerHooks.php
+                ├── LicenceCheck.php
+                ├── DriftSync.php
+                └── WelcomeMail.php
 ```
 
-## 3. Get the API credentials
+No database migrations, no Composer install, no extra steps — the module is
+self-contained.
 
-### Platform mode
+---
 
-On your PanelDNS server, generate an operator-tier key:
+## Step 3 — Add a server in WHMCS
 
-```bash
-docker exec paneldns-app-1 php artisan paneldns:platform-keygen
+The "server" in WHMCS represents your connection to the PanelDNS API.
+
+1. In WHMCS Admin, go to **Setup → Products/Services → Servers**
+2. Click **Add New Server**
+3. Fill in:
+
+   | Field | What to enter |
+   |---|---|
+   | **Name** | Anything descriptive, e.g. `PanelDNS` |
+   | **Hostname** | Your PanelDNS domain, e.g. `app.paneldns.com` — no `https://`, no trailing slash |
+   | **Secure** | ☑ Tick this (uses HTTPS) |
+   | **Username** | Leave blank |
+   | **Password** | Leave blank |
+   | **Access Hash** | Paste your API token from Step 1 |
+   | **Module** | Select `paneldns-reseller` from the dropdown |
+
+4. Click **Save Changes**
+5. Click **Test Connection** — you should see a success message. If not, see [Troubleshooting](#troubleshooting).
+
+---
+
+## Step 4 — Create a product
+
+1. Go to **Setup → Products/Services → Products/Services**
+2. Click **Create a New Product**
+3. Set the product type to **Hosting Account** and choose a product group
+4. On the **Module Settings** tab:
+   - **Module Name**: `paneldns-reseller`
+   - **Server Group**: select the server group containing your PanelDNS server
+
+5. Still on Module Settings, configure the options:
+
+   | Option | Recommended setting | Notes |
+   |---|---|---|
+   | Zone Limit | `5` | How many DNS zones this plan allows |
+   | Max Records Per Zone | `100` | Record cap per zone |
+   | Send Welcome Email | `Yes` | Sends portal login link on provisioning |
+   | NS1–NS4 Hostname | *(leave blank)* | Only needed for white-label nameservers |
+   | SOA Email | *(leave blank)* | Only needed if you want a custom SOA contact email |
+   | Auto-Create Zone on Domain Order | `Yes` | Recommended — zones are created automatically when clients register domains |
+   | Auto-Delete Zone on Domain Expiry | `No` | Leave off unless you are sure clients don't need the data |
+
+6. Set your pricing on the **Pricing** tab as normal
+7. Click **Save Changes**
+
+---
+
+## Step 5 — Test with a real order
+
+Place a test order:
+
+1. Create or use a test client account in WHMCS
+2. Order the product you just created
+3. In WHMCS Admin, navigate to the order and **Accept** it
+4. The service should move to **Active** status
+
+Verify it worked:
+
+- In WHMCS Admin → **Clients → [your test client] → Services**, find the service
+  and click **View Details**
+- The **Module Commands** tab should show a **PanelDNS Sub-client ID**
+- In your PanelDNS dashboard → **Sub-clients**, the new account should appear
+- Click **Open Portal as Client** — you should land in PanelDNS authenticated as
+  the sub-client
+- The test client's WHMCS client area should show a DNS management panel under the
+  product
+
+---
+
+## Step 6 — (Optional) Bulk sync existing WHMCS clients
+
+If you already have WHMCS clients who should have PanelDNS accounts but were
+provisioned before this module was installed, use the bulk sync to catch them up.
+
+1. In WHMCS Admin, go to **Setup → Products/Services → Servers**
+2. Click **Edit** next to your PanelDNS server
+3. Scroll to **Server Functions** and click **Bulk Sync Sub-clients**
+
+The sync will:
+- **Skip** services that already have a sub-client ID (already provisioned — safe to
+  re-run at any time)
+- **Link** services whose client email matches an existing PanelDNS sub-client (no
+  duplicate created)
+- **Create** sub-clients for services with no match in PanelDNS
+
+The result is shown immediately, e.g.:
+```
+Created: 12 | Linked: 3 | Skipped (already provisioned): 47
 ```
 
-Copy the 64-char hex value to `.env`:
+> **Note:** Welcome emails are not sent during bulk sync. If you want clients to
+> receive login details, send them manually or trigger a re-send from each service.
 
-```ini
-PLATFORM_API_KEY=eef13883…
-```
+> **Large installs:** The sync is capped at 200 services per run to prevent PHP
+> timeouts. If you see "Cap reached — re-run to continue", click the button again.
 
-Restart: `docker compose restart app horizon scheduler`.
+---
 
-### Reseller mode
+## Step 7 — (Optional) White-label nameservers
 
-In your PanelDNS dashboard:
+If you want clients to see your own nameservers (e.g. `ns1.yourbrand.com`) instead
+of the PanelDNS defaults:
 
-1. **Dashboard → API Tokens → Create Token**
-2. Name: `WHMCS Module`
-3. Scopes: `sub_clients:read`, `sub_clients:write`, `zones:read`
-4. Copy the displayed token (shown once).
+1. Set up vanity nameservers in your PanelDNS dashboard → **Settings → Nameservers**
+2. In WHMCS, edit your product's **Module Settings**
+3. Fill in **NS1–NS4 Hostname** with your vanity nameserver hostnames
+4. These are shown in the welcome email and in the client area "use these
+   nameservers" panel
 
-## 4. Add the WHMCS server
+The sub-client inherits your org's actual nameservers server-side — these fields
+only control the display. See the
+[PanelDNS Vanity NS docs](https://github.com/Veeau/paneldns/blob/master/docs/VANITY-NS.md)
+for provider-specific setup.
 
-**WHMCS Admin → Setup → Products/Services → Servers → Add New Server**
+---
 
-| Field | Value |
-|---|---|
-| Name | `PanelDNS Platform` (or whatever you prefer) |
-| Hostname | `paneldns.example.com` (no protocol, no path) |
-| Username | *(leave blank)* |
-| Password | *(leave blank)* |
-| **Access Hash** | Your PLATFORM_API_KEY *(platform mode)* or Sanctum token *(reseller mode)* |
-| **Secure** | ☑ Tick for HTTPS (recommended) |
+## Step 8 — (Optional) Addon products for extra zones
 
-Click **Test Connection** — should report success.
+You can sell zone-limit upgrades as WHMCS product addons:
 
-## 5. Create a WHMCS product
+1. In WHMCS Admin, go to **Setup → Products/Services → Product Addons**
+2. Create a new addon with a name that includes a number and the word "zones" or
+   "zone", e.g.:
+   - `PanelDNS +10 Zones`
+   - `Extra 25 Zones`
+   - `DNS Zone Pack (+5)`
+3. Link the addon to your PanelDNS product(s)
 
-**Setup → Products/Services → Products/Services → Create**
+When a client activates the addon, the module automatically raises their PanelDNS
+zone limit by the number in the addon name. Suspending or terminating the addon
+lowers it back.
 
-- **Module**: `paneldns-platform` (or `paneldns-reseller`)
-- **Server**: select the one you just added
+If no number is found in the addon name, 5 extra zones is assumed as a fallback.
 
-**Module Settings** tab — fill in:
+---
 
-| Platform mode | Reseller mode |
-|---|---|
-| PanelDNS Plan ID *(numeric — from /admin/plans on your PanelDNS server)* | Zone Limit *(e.g. 5)* |
-| Partner Source *(optional, e.g. wphosting)* | Max Records Per Zone *(e.g. 100)* |
-| Send Welcome Email *(yes/no)* | Send Welcome Email *(yes/no)* |
+## Step 9 — (Optional) Automatic zone creation on domain registration
 
-### Optional: per-product vanity nameservers (T2.3, v0.5.0+)
+When a client registers or transfers a domain through WHMCS (via any registrar
+module), this module can automatically create a matching DNS zone in PanelDNS.
 
-Both modules expose five additional ConfigOptions for white-label /
-multi-brand setups:
+This feature is enabled by default via the **Auto-Create Zone on Domain Order**
+product config option. No additional setup is required — the module registers a
+WHMCS hook (`AfterRegistrarRegistration`, `AfterRegistrarTransfer`) that fires
+after any domain event.
 
-| Field | Effect |
-|---|---|
-| `NS1 Hostname` … `NS4 Hostname` | Override the default NS hostnames for orgs / sub-clients provisioned under this product |
-| `SOA Email` | Override the default SOA contact email |
+To also auto-delete zones when domains expire, set **Auto-Delete Zone on Domain
+Expiry** to `Yes` on the product. This is off by default because zone data may
+still be useful to clients even after a domain expires.
 
-- **Platform mode**: pushed into `POST /platform/v1/orgs` at create-time, stored on the org.
-- **Reseller mode**: surfaced in the welcome email and client-area "use these nameservers" panel. Sub-clients inherit the parent org's NS records server-side; the override is decorative for billing-brand separation.
+---
 
-Leave blank to inherit the org / platform defaults. Requires **PanelDNS
-≥ v3.5.3** on the server side. See
-[`paneldns/docs/VANITY-NS.md`](https://github.com/Veeau/paneldns/blob/master/docs/VANITY-NS.md)
-for the per-provider reality check on whether vanity NS actually
-answers DNS queries (depends on the underlying DNS provider — works
-free on PowerDNS / BIND clusters, requires paid addons on Cloudflare /
-Route 53).
+## Daily drift sync
 
-### Optional: registrar-event auto-zone creation (T2.1, addon v0.4.0+)
+The module registers a WHMCS cron hook that runs nightly. It:
+- Compares the WHMCS service status with the PanelDNS sub-client status
+- Corrects any drift (e.g. a sub-client that was manually changed in PanelDNS)
+- Logs discrepancies to the WHMCS Module Log
 
-If you've activated the `paneldns` addon module, two toggles in **Setup
-→ Addon Modules → PanelDNS** control automatic zone creation when ANY
-WHMCS registrar module (eNom, ResellerClub, Namecheap, OpenSRS,
-Cloudflare-Registrar, etc.) registers a domain for a customer:
+No setup is required — it activates automatically once the module files are in place
+and WHMCS is running its standard cron job.
 
-| Setting | Default | Effect |
-|---|---|---|
-| `Auto-create zone on domain registration` | ON | Fires on `AfterRegistrarRegistration` — `POST /api/v1/zones` with the new domain + customer's sub-client ID |
-| `Auto-create zone on inbound transfer` | ON | Fires on `AfterRegistrarTransfer` |
+---
 
-Only fires for customers who have an active `paneldns-reseller`
-service. Failure mode is best-effort — exceptions log via
-`logModuleCall()` and never block the registrar's own success path.
+## Module logs
 
-## 6. Smoke test
+All API calls are recorded in WHMCS with API keys redacted:
 
-1. Place a test order against the new product.
-2. Approve / mark active in WHMCS Admin.
-3. Check the PanelDNS Filament admin (`/admin/orgs` or `/admin/sub-clients`)
-   — the new account should appear.
-4. Click **"Login to PanelDNS"** in WHMCS client area → should land
-   authenticated in PanelDNS.
-5. Suspend the service in WHMCS → org/sub-client shows `suspended` in
-   PanelDNS within seconds.
-6. Unsuspend → status returns to `active`.
+**WHMCS Admin → System Logs → Module Log**
 
-## 7. Module logs
+Filter by module name `paneldns` to see only PanelDNS entries. Each entry shows
+the HTTP method, endpoint, response status, and any error message.
 
-WHMCS Admin → System Logs → Module Log. All API calls are logged with
-keys redacted.
+---
+
+## Upgrading
+
+1. Download the new ZIP from the [Releases page](https://github.com/Veeau/paneldns-reseller-whmcs/releases)
+2. Extract and overwrite the `modules/servers/paneldns-reseller/` directory
+3. No database changes or WHMCS cache clearing needed
+
+---
 
 ## Troubleshooting
 
-- **Test Connection fails** — confirm the Access Hash and hostname.
-  Check WHMCS Module Log for the exact response.
-- **CreateAccount returns "Plan ID is required"** — populate Plan ID
-  in the product's Module Settings.
-- **License-locked** — if your PanelDNS subscription lapsed, the module
-  enters read-only mode after a 7-day grace period.
+### Test Connection fails
 
-For deeper docs see the [PanelDNS docs](https://github.com/Veeau/paneldns/tree/master/docs).
+- Check the **Hostname** field — no `https://`, no trailing slash, no port unless
+  PanelDNS runs on a non-standard port
+- Check the **Access Hash** — paste the token with no leading/trailing spaces
+- Check that the token scopes include `sub_clients:read`
+- Check WHMCS Module Log for the exact error response from PanelDNS
+
+### CreateAccount returns an error
+
+- **"Licence not active"** — your PanelDNS subscription has lapsed. Log in to
+  PanelDNS and check your billing status. The module enters a 7-day grace period
+  before blocking new provisioning.
+- **"Zone limit exceeded"** — your reseller org has hit its own zone ceiling. Upgrade
+  your PanelDNS plan or reduce the Zone Limit on your WHMCS product.
+- **"Email already taken"** — a sub-client with this email already exists. Use
+  **Bulk Sync** (Step 6) to link the existing sub-client rather than creating a
+  duplicate.
+
+### Client can't log in to the portal
+
+- Click **Open Portal as Client** on the service in WHMCS Admin — if this works,
+  SSO is functioning and the client is using the wrong credentials
+- The welcome email contains a one-time SSO link (valid 60 seconds). The client
+  should set a password via the portal's **Forgot Password** flow for permanent
+  access.
+
+### Zones not created on domain registration
+
+- Verify **Auto-Create Zone on Domain Order** is set to `Yes` on the product
+- Confirm the WHMCS module log shows a `AfterRegistrarRegistration` hook firing
+- The client must have an **Active** paneldns-reseller service — the hook only fires
+  if a provisioned service is found for that client
+
+### Admin service tab shows "Not provisioned yet"
+
+- The sub-client ID is stored in the service's `Dedicated IP` field. If it's blank
+  the service was never successfully provisioned.
+- Try clicking **Resync Status** — if that also fails, re-run **Create** from the
+  Module Commands tab or use **Bulk Sync** from the server page.
+
+---
+
+## Uninstalling
+
+1. Terminate all active services using this module (optional but recommended — this
+   deletes the corresponding PanelDNS sub-clients)
+2. Delete the `modules/servers/paneldns-reseller/` directory from your WHMCS install
+3. Remove any products and server entries linked to this module from WHMCS Admin
+
+The module creates no WHMCS database tables of its own. Sub-client IDs are stored
+in the standard `dedicatedip` field of `tblhosting` and are removed when services
+are deleted normally.
