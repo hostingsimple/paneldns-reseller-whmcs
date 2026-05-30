@@ -31,7 +31,7 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '0.5.1');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.1.0');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';
@@ -102,6 +102,16 @@ function paneldns_reseller_ConfigOptions(): array
             'Size'        => 32,
             'Default'     => '',
             'Description' => 'SOA contact email shown in the welcome email. Defaults to the org\'s configured value.',
+        ],
+        'Auto-Create Zone on Domain Order' => [
+            'Type'        => 'yesno',
+            'Default'     => 'yes',
+            'Description' => 'When a domain is registered or transferred for this client, automatically create a matching DNS zone in PanelDNS.',
+        ],
+        'Auto-Delete Zone on Domain Expiry' => [
+            'Type'        => 'yesno',
+            'Default'     => 'no',
+            'Description' => 'When a domain is deleted or expires, remove the DNS zone. Disabled by default — enable only if you are sure clients do not need the zone data.',
         ],
     ];
 }

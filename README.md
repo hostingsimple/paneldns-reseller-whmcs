@@ -11,6 +11,14 @@ When a WHMCS client orders a product using this module, it automatically:
 - Keeps WHMCS and PanelDNS in sync (suspend, unsuspend, terminate)
 - Embeds a zone/record management UI directly in the WHMCS client area
 
+It can also:
+- **Auto-create a DNS zone** when the client registers or transfers a domain
+  (and optionally remove it when the domain is deleted) — per-product toggles
+- **Grant extra zones via product addons** — an addon named like "PanelDNS +10
+  Zones" raises the sub-client's zone limit on activation
+- **Show live usage** (zones/records vs limit) in the admin service detail tab
+- **Flag unhealthy zones** in the client area so customers spot problems early
+
 ## Requirements
 
 - WHMCS 8.7+

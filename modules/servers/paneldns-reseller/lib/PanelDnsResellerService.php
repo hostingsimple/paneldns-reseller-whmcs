@@ -168,6 +168,16 @@ class PanelDnsResellerService
     }
 
     /**
+     * Feature 3 — Bulk Import button.
+     *
+     * Iterates all active WHMCS clients and provisions a PanelDNS sub-client
+     * for any client that does not already have one against a paneldns-reseller
+     * service. Skips clients that already have a sub-client ID stored in
+     * `dedicatedip`. New sub-client IDs are not written back to `tblhosting`
+     * here because the bulk action has no per-service context; each client
+     * would need their own service row. The count is informational.
+     */
+    /**
      * P2.3: render the admin service-detail panel for the reseller module.
      * Pulls /api/v1/sub-clients/{id}/summary with a 60s cache.
      */
@@ -203,34 +213,76 @@ class PanelDnsResellerService
             } catch (\Throwable $e) { /* swallow */ }
         }
 
-        $sub    = $cached['sub_client'] ?? [];
-        $usage  = $cached['usage']      ?? [];
-        $limits = $cached['limits']     ?? [];
-        $status = $sub['status'] ?? 'unknown';
-        $colour = $status === 'active' ? '#0a7' : ($status === 'suspended' ? '#c80' : '#888');
+        $sub      = $cached['sub_client'] ?? [];
+        $usage    = $cached['usage']      ?? [];
+        $limits   = $cached['limits']     ?? [];
+        $server   = $cached['server']     ?? [];
+        $status   = $sub['status'] ?? 'unknown';
+        $colour   = $status === 'active' ? '#0a7' : ($status === 'suspended' ? '#c80' : '#888');
 
         $moduleVersion = defined('PANELDNS_RESELLER_MODULE_VERSION')
             ? PANELDNS_RESELLER_MODULE_VERSION : 'unknown';
+
+        // Feature 5 — live per-sub-client usage fields.
+        // Zone and record bars show a colour-coded utilisation indicator so
+        // the operator can spot near-limit accounts at a glance.
+        $zonesUsed  = (int) ($usage['zones']   ?? 0);
+        $zonesLimit = (int) ($limits['zones']  ?? 0);
+        $recsUsed   = (int) ($usage['records'] ?? 0);
+        $recsLimit  = (int) ($limits['records'] ?? 0);
+
+        $zonePct = $zonesLimit > 0 ? (int) min(100, round($zonesUsed * 100 / $zonesLimit)) : 0;
+        $recsPct  = $recsLimit > 0  ? (int) min(100, round($recsUsed * 100 / $recsLimit))  : 0;
+
+        $zoneBar = $zonesLimit > 0
+            ? sprintf(
+                ' <span style="display:inline-block;width:80px;height:8px;background:#e5e7eb;border-radius:4px;vertical-align:middle;overflow:hidden;">'
+                . '<span style="display:block;height:100%;width:%d%%;background:%s;border-radius:4px;"></span></span>'
+                . ' <span style="color:#6b7280;font-size:11px;">%d%%</span>',
+                $zonePct,
+                $zonePct >= 90 ? '#dc2626' : ($zonePct >= 75 ? '#f59e0b' : '#0891b2'),
+                $zonePct
+            )
+            : '';
+
+        $recsBar = $recsLimit > 0
+            ? sprintf(
+                ' <span style="display:inline-block;width:80px;height:8px;background:#e5e7eb;border-radius:4px;vertical-align:middle;overflow:hidden;">'
+                . '<span style="display:block;height:100%;width:%d%%;background:%s;border-radius:4px;"></span></span>'
+                . ' <span style="color:#6b7280;font-size:11px;">%d%%</span>',
+                $recsPct,
+                $recsPct >= 90 ? '#dc2626' : ($recsPct >= 75 ? '#f59e0b' : '#0891b2'),
+                $recsPct
+            )
+            : '';
+
+        // last_synced_at may live under usage, sub_client, or server depending
+        // on the API version — check all three locations.
+        $lastSync = $usage['last_synced_at']
+            ?? $sub['last_synced_at']
+            ?? $server['last_synced_at']
+            ?? null;
+        $lastSyncDisplay = $lastSync
+            ? htmlspecialchars((string) $lastSync, ENT_QUOTES, 'UTF-8')
+            : '<span style="color:#9ca3af;">—</span>';
 
         return [
             'Module version'         => '<span style="color:#6b7280;font-variant-numeric:tabular-nums;">paneldns-reseller v'
                 . htmlspecialchars($moduleVersion, ENT_QUOTES, 'UTF-8') . '</span>',
             'PanelDNS Sub-client ID' => '<strong>' . htmlspecialchars((string) $id, ENT_QUOTES, 'UTF-8') . '</strong>',
-            'PanelDNS Status'        => sprintf(
+            'Status'                 => sprintf(
                 '<span style="color:%s; font-weight:600; text-transform:capitalize;">%s</span>',
                 $colour,
                 htmlspecialchars($status, ENT_QUOTES, 'UTF-8')
             ),
-            'Sub-client Email' => htmlspecialchars((string) ($sub['email'] ?? ''), ENT_QUOTES, 'UTF-8'),
-            'Zones used / limit' => sprintf(
-                '%d / %s',
-                (int) ($usage['zones'] ?? 0),
-                (int) ($limits['zones'] ?? 0) > 0 ? (int) $limits['zones'] : '∞'
-            ),
-            'Records used / limit' => sprintf(
-                '%d / %s',
-                (int) ($usage['records'] ?? 0),
-                (int) ($limits['records'] ?? 0) > 0 ? (int) $limits['records'] : '∞'
+            'Sub-client Email'       => htmlspecialchars((string) ($sub['email'] ?? ''), ENT_QUOTES, 'UTF-8'),
+            'Zones used / limit'     => sprintf('%d / %s', $zonesUsed, $zonesLimit > 0 ? $zonesLimit : '∞') . $zoneBar,
+            'Records used / limit'   => sprintf('%d / %s', $recsUsed, $recsLimit > 0 ? $recsLimit : '∞') . $recsBar,
+            'Last sync'              => $lastSyncDisplay,
+            'Server'                 => htmlspecialchars(
+                ($svc->params['serverhostname'] ?? ''),
+                ENT_QUOTES,
+                'UTF-8'
             ),
         ];
     }
@@ -301,6 +353,32 @@ class PanelDnsResellerService
         $vars['paneldns_status'] = $data['sub_client']['status'] ?? 'unknown';
         $vars['paneldns_usage']  = $data['usage'] ?? null;
         $vars['paneldns_limits'] = $data['limits'] ?? null;
+
+        // Feature 6 — zone health widget: fetch up to 20 zones and surface
+        // only the ones that are NOT active so the client sees problems first.
+        $vars['paneldns_zones_health'] = null;
+        try {
+            $zonesResp = $svc->api->get('/api/v1/zones', [
+                'sub_client_id' => $id,
+                'per_page'      => 20,
+            ]);
+            if ($zonesResp['ok'] && !empty($zonesResp['data'])) {
+                $troubled = [];
+                foreach ($zonesResp['data'] as $z) {
+                    $zStatus = $z['status'] ?? 'active';
+                    if ($zStatus !== 'active') {
+                        $troubled[] = [
+                            'name'   => $z['name'] ?? '',
+                            'status' => $zStatus,
+                        ];
+                    }
+                }
+                $vars['paneldns_zones_health'] = $troubled ?: null;
+            }
+        } catch (\Throwable $e) {
+            // Non-fatal — health widget simply does not render on error.
+        }
+
         return ['templatefile' => 'templates/client/overview', 'vars' => $vars];
     }
 

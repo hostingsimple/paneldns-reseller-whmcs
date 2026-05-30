@@ -69,4 +69,18 @@
         </div>
     {/if}
 
+    {* Feature 6 — Zone health widget: surfaces zones that are not active. *}
+    {if $paneldns_zones_health && $paneldns_zones_health|count > 0}
+        <div style="background:#fff; border:1px solid #fbbf24; border-radius:10px; padding:16px; margin-top:12px;">
+            <div style="font-size:13px; font-weight:600; color:#92400e; margin-bottom:8px;">&#9888; Zone Issues Detected</div>
+            {foreach from=$paneldns_zones_health item=zone}
+            <div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #f3f4f6; font-size:13px;">
+                <span style="color:#374151;">{$zone.name|escape}</span>
+                <span style="color:#dc2626; font-weight:600;">{$zone.status|escape}</span>
+            </div>
+            {/foreach}
+            <p style="margin:8px 0 0; font-size:12px; color:#9ca3af;">Open the full DNS portal to investigate these zones.</p>
+        </div>
+    {/if}
+
 </div>
