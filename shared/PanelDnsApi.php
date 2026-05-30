@@ -132,6 +132,23 @@ class PanelDnsApi
         return $this->post("/api/v1/sub-clients/{$id}/sso-token");
     }
 
+    /**
+     * Search sub-clients by email (LIKE match on name+email server-side).
+     * Returns up to $perPage results from the given page. Callers must
+     * filter results client-side for an exact email match — the server uses
+     * a LIKE query that may surface partial matches.
+     *
+     * Used by bulkSyncForServer() to dedup before creating sub-clients.
+     */
+    public function searchSubClients(string $email, int $page = 1, int $perPage = 50): array
+    {
+        return $this->get('/api/v1/sub-clients', [
+            'search'   => $email,
+            'page'     => $page,
+            'per_page' => $perPage,
+        ]);
+    }
+
     // ── Zones (reseller tier) ─────────────────────────────────────────────────
 
     /**

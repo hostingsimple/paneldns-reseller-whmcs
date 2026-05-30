@@ -31,7 +31,7 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '1.1.0');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.2.0');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';
@@ -148,6 +148,28 @@ function paneldns_reseller_AdminCustomButtonArray(): array
         'Open Portal as Client'  => 'openPortal',
         'Resync Status'          => 'resyncStatus',
     ];
+}
+
+/**
+ * Server-level buttons shown on the WHMCS Server configuration page
+ * (Admin → Setup → Servers → Edit). These operate across all services
+ * on this server rather than on a single service row.
+ */
+function paneldns_reseller_ServerCustomButtonArray(): array
+{
+    return [
+        'Bulk Sync Sub-clients' => 'bulkSync',
+    ];
+}
+
+/**
+ * Bulk sync all Active/Suspended services on this server to PanelDNS
+ * sub-clients. Idempotent: existing sub-clients (identified by email)
+ * are linked rather than duplicated. Capped at 200 services per run.
+ */
+function paneldns_reseller_bulkSync(array $params): string
+{
+    return PanelDnsResellerService::bulkSyncForServer($params);
 }
 
 function paneldns_reseller_testConnection(array $params): string

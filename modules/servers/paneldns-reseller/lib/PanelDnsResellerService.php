@@ -168,15 +168,185 @@ class PanelDnsResellerService
     }
 
     /**
-     * Feature 3 — Bulk Import button.
+     * BULK-01: Bulk-sync all WHMCS services on this server to PanelDNS sub-clients.
      *
-     * Iterates all active WHMCS clients and provisions a PanelDNS sub-client
-     * for any client that does not already have one against a paneldns-reseller
-     * service. Skips clients that already have a sub-client ID stored in
-     * `dedicatedip`. New sub-client IDs are not written back to `tblhosting`
-     * here because the bulk action has no per-service context; each client
-     * would need their own service row. The count is informational.
+     * Called from the server-level "Bulk Sync Sub-clients" custom button. Iterates
+     * every Active/Suspended tblhosting row on this WHMCS server and ensures a
+     * matching PanelDNS sub-client exists:
+     *
+     *   1. Already has dedicatedip set → skip (already provisioned; no API call).
+     *   2. No dedicatedip → search /api/v1/sub-clients?search={email}, filter for
+     *      exact email match. If found → store the existing sub-client ID in
+     *      dedicatedip (link). If not found → create, store ID (provision).
+     *
+     * Welcome emails are NOT sent during bulk sync — clients are provisioned
+     * silently. They will receive a welcome email the next time an individual
+     * CreateAccount runs, or the reseller can trigger one manually.
+     *
+     * Capped at 200 services per run to prevent PHP timeouts on large installs.
+     * Re-run to continue if the cap is hit.
+     *
+     * @param array $params  WHMCS server params (serverhostname, serveraccesshash, …)
+     * @return string  Summary line: "Created: N | Linked: N | Skipped: N [| Errors: …]"
      */
+    public static function bulkSyncForServer(array $params): string
+    {
+        $baseUrl = ($params['serversecure'] ? 'https' : 'http')
+            . '://' . ($params['serverhostname'] ?? 'localhost')
+            . ($params['serverport'] && !in_array((int) $params['serverport'], [80, 443], true)
+                ? ':' . (int) $params['serverport'] : '');
+
+        $api = new PanelDnsApi(
+            $baseUrl,
+            $params['serveraccesshash'] ?? '',
+            PanelDnsApi::MODE_RESELLER,
+            (bool) ($params['serversecure'] ?? true)
+        );
+
+        // Verify connectivity before touching the DB.
+        $ping = $api->ping();
+        if (!$ping['ok']) {
+            return 'Connection failed: ' . ($ping['error'] ?? 'unknown error');
+        }
+
+        $serverId = (int) ($params['serverid'] ?? 0);
+        if ($serverId <= 0) {
+            return 'No server ID in params.';
+        }
+
+        // BULK-02: fetch Active/Suspended services with client + product config in one join.
+        try {
+            $services = \WHMCS\Database\Capsule::table('tblhosting as h')
+                ->join('tblclients as c', 'c.id', '=', 'h.userid')
+                ->join('tblproducts as p', 'p.id', '=', 'h.packageid')
+                ->where('h.server', $serverId)
+                ->whereIn('h.domainstatus', ['Active', 'Suspended'])
+                ->select([
+                    'h.id as serviceid',
+                    'h.userid',
+                    'h.dedicatedip',
+                    'h.domainstatus',
+                    'c.email',
+                    'c.firstname',
+                    'c.lastname',
+                    'p.configoption1 as zone_limit',
+                    'p.configoption2 as max_records',
+                ])
+                ->get()
+                ->all();
+        } catch (\Throwable $e) {
+            return 'DB error: ' . $e->getMessage();
+        }
+
+        if (empty($services)) {
+            return 'No active or suspended services found on this server.';
+        }
+
+        $cap      = 200; // BULK-03: hard cap — re-run to process remainder
+        $created  = 0;
+        $linked   = 0;
+        $skipped  = 0;
+        $errors   = [];
+        $processed = 0;
+
+        foreach ($services as $svc) {
+            if ($processed >= $cap) {
+                $errors[] = "Cap reached ({$cap} services). Re-run to continue.";
+                break;
+            }
+            $processed++;
+
+            // Already provisioned — nothing to do.
+            if (!empty($svc->dedicatedip) && is_numeric(trim((string) $svc->dedicatedip))) {
+                $skipped++;
+                continue;
+            }
+
+            $email = trim((string) ($svc->email ?? ''));
+            if ($email === '') {
+                $errors[] = "Service #{$svc->serviceid}: client has no email address.";
+                continue;
+            }
+
+            // Search for an existing sub-client with this exact email.
+            $existing = null;
+            $search = $api->searchSubClients($email);
+            if ($search['ok'] && !empty($search['data'])) {
+                foreach ((array) $search['data'] as $sc) {
+                    if (isset($sc['email']) && strtolower($sc['email']) === strtolower($email)) {
+                        $existing = $sc;
+                        break;
+                    }
+                }
+            }
+
+            if ($existing !== null) {
+                // BULK-04: link — sub-client exists; just store the ID.
+                $existingId = (int) ($existing['id'] ?? 0);
+                if ($existingId <= 0) {
+                    $errors[] = "Service #{$svc->serviceid}: found sub-client but id is missing.";
+                    continue;
+                }
+                try {
+                    \WHMCS\Database\Capsule::table('tblhosting')
+                        ->where('id', $svc->serviceid)
+                        ->update(['dedicatedip' => (string) $existingId]);
+                } catch (\Throwable $e) {
+                    $errors[] = "Service #{$svc->serviceid}: link DB update failed.";
+                    continue;
+                }
+                $linked++;
+                continue;
+            }
+
+            // BULK-05: provision — no sub-client exists; create one.
+            $name = trim(($svc->firstname ?? '') . ' ' . ($svc->lastname ?? ''));
+            if ($name === '') $name = $email;
+
+            $resp = $api->createSubClient([
+                'name'        => $name,
+                'email'       => $email,
+                // Random password — sub-client must reset via portal.
+                // Welcome email intentionally skipped for bulk operations.
+                'password'    => bin2hex(random_bytes(12)),
+                'zone_limit'  => max(0, (int) ($svc->zone_limit  ?? 5)),
+                'max_records' => max(0, (int) ($svc->max_records ?? 100)),
+                'status'      => $svc->domainstatus === 'Active' ? 'active' : 'suspended',
+            ]);
+
+            if (!$resp['ok']) {
+                $errors[] = "Service #{$svc->serviceid} ({$email}): " . ($resp['error'] ?? 'create failed');
+                continue;
+            }
+
+            $newId = (int) ($resp['data']['id'] ?? 0);
+            if ($newId <= 0) {
+                $errors[] = "Service #{$svc->serviceid}: created but no id returned.";
+                continue;
+            }
+
+            try {
+                \WHMCS\Database\Capsule::table('tblhosting')
+                    ->where('id', $svc->serviceid)
+                    ->update(['dedicatedip' => (string) $newId]);
+            } catch (\Throwable $e) {
+                $errors[] = "Service #{$svc->serviceid}: ID store failed after create.";
+            }
+
+            $created++;
+        }
+
+        $summary = "Created: {$created} | Linked: {$linked} | Skipped (already provisioned): {$skipped}";
+        if (!empty($errors)) {
+            $first5 = array_slice($errors, 0, 5);
+            $summary .= ' | Errors: ' . implode('; ', $first5);
+            if (count($errors) > 5) {
+                $summary .= ' … (' . count($errors) . ' total)';
+            }
+        }
+        return $summary;
+    }
+
     /**
      * P2.3: render the admin service-detail panel for the reseller module.
      * Pulls /api/v1/sub-clients/{id}/summary with a 60s cache.

@@ -4,6 +4,29 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.2.0] — 2026-05-30
+
+### Added
+
+- **Bulk sub-client sync** — a new "Bulk Sync Sub-clients" button on the WHMCS
+  Server configuration page (`ServerCustomButtonArray`) iterates all Active and
+  Suspended services on that server and ensures each has a matching PanelDNS
+  sub-client. The sync is fully idempotent:
+  - Services with a sub-client ID already stored in `dedicatedip` are skipped.
+  - Services without an ID are looked up by exact email match against
+    `GET /api/v1/sub-clients?search={email}`. If found the existing sub-client
+    ID is linked (no duplicate created). If not found a new sub-client is
+    provisioned.
+  - Capped at 200 services per run to prevent PHP timeouts; re-run to continue
+    on large installs.
+  - Welcome emails are intentionally skipped during bulk sync (clients
+    receive them on the next individual CreateAccount run or manually).
+- **`PanelDnsApi::searchSubClients()`** — new typed helper wrapping
+  `GET /api/v1/sub-clients?search=`. Synced to `paneldns-whmcs/shared/` as
+  required by the shared-file sync rule.
+
+---
+
 ## [1.1.0] — 2026-05-30
 
 ### Added
