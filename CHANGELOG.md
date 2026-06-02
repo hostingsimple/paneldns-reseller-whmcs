@@ -4,6 +4,36 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.6.0] — 2026-06-03
+
+### Added
+
+- **BIND zone export in embedded DNS manager (EXPORT-01)** — a new "↓ Export (BIND)"
+  button appears in the zone records page header. Clicking it calls
+  `GET /api/v1/zones/{id}/export`, verifies zone ownership, and streams the BIND-format
+  text file as a `{zone}.zone` attachment. Gracefully shows a flash error if the zone
+  has no DNS provider configured. New `zone-export` action wired through
+  `EmbeddedDnsManager`, `ClientAreaAllowedFunctions`, and `clientArea()`. Requires
+  `PanelDnsApi::request()` to include `raw_body` in its return (non-JSON endpoint).
+- **Client locale sync on `ClientEdit` (LOCALE-01)** — when a reseller's WHMCS client
+  updates their profile, the module now includes a `locale` field in the
+  `PATCH /api/v1/sub-clients/{id}` call mapped from `tblclients.language`. The
+  PanelDNS portal renders in the client's WHMCS language automatically. Mapping: english→en,
+  spanish→es, french→fr, german→de, portuguese/brazilian→pt, chinese/chinesesimp→zh\_Hans,
+  chinesetrad→zh\_Hant. Unmapped languages are ignored. Requires PanelDNS v3.22+.
+- **`PanelDnsApi`: `raw_body` in response array** — `request()` now always includes
+  `raw_body` in its return. Existing callers are unaffected (they ignore unknown keys).
+  Enables the export handler to read text/plain responses without a separate code path.
+
+### Not implemented — DNSSEC toggle
+
+DNSSEC management is not exposed via the `/api/v1` Bearer-token API (only via the portal
+session routes). The DNSSEC toggle in the embedded manager is blocked until
+`GET/POST /api/v1/zones/{zone}/dnssec` is added to the paneldns public API. Tracked for
+a future release.
+
+---
+
 ## [1.5.0] — 2026-06-03
 
 ### Added

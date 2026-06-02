@@ -781,6 +781,7 @@ class PanelDnsResellerService
 
         $embeddedActions = [
             'zones', 'records', 'zone-create', 'zone-import',
+            'zone-export', // EXPORT-01: BIND download — EmbeddedDnsManager streams and exits
             'do-zone-create', 'do-zone-import', 'do-zone-delete',
             'do-record-create', 'do-record-update', 'do-record-delete',
         ];

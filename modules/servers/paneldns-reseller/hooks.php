@@ -100,14 +100,15 @@ add_hook('ClientEdit', 1, function (array $vars) {
     try {
         $client = \WHMCS\Database\Capsule::table('tblclients')
             ->where('id', $userId)
-            ->select(['firstname', 'lastname', 'email'])
+            ->select(['firstname', 'lastname', 'email', 'language'])
             ->first();
         if (!$client) return;
         PanelDnsResellerHooks::onClientEdit(
             $userId,
             (string) $client->firstname,
             (string) $client->lastname,
-            (string) $client->email
+            (string) $client->email,
+            (string) ($client->language ?? '')
         );
     } catch (\Throwable $e) {
         if (function_exists('logActivity')) {

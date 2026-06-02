@@ -237,10 +237,14 @@ class PanelDnsApi
         $ok = $status >= 200 && $status < 300 && is_array($decoded) && !empty($decoded['ok']);
 
         return [
-            'ok'     => $ok,
-            'status' => $status,
-            'data'   => is_array($decoded) ? ($decoded['data'] ?? $decoded) : null,
-            'error'  => $ok ? null : ($decoded['error'] ?? "HTTP {$status}"),
+            'ok'       => $ok,
+            'status'   => $status,
+            'data'     => is_array($decoded) ? ($decoded['data'] ?? $decoded) : null,
+            'error'    => $ok ? null : ($decoded['error'] ?? "HTTP {$status}"),
+            // EXPORT-01: raw body included for non-JSON endpoints (e.g. zone BIND export
+            // returns text/plain). Callers check 'status' directly and read 'raw_body'
+            // rather than relying on 'ok'/'data' for non-JSON responses.
+            'raw_body' => $raw,
         ];
     }
 

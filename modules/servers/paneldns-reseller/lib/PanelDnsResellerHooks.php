@@ -193,13 +193,34 @@ class PanelDnsResellerHooks
     }
 
     /**
-     * CLIENT-SYNC-01: push name/email changes from WHMCS to PanelDNS.
+     * WHMCS language name → ISO locale code map.
+     * Keys are lowercased values of tblclients.language.
+     * PanelDNS supported locales (as of v3.21): en, es, fr, de, pt, zh_Hans, zh_Hant.
+     */
+    private const LOCALE_MAP = [
+        'english'            => 'en',
+        'spanish'            => 'es',
+        'french'             => 'fr',
+        'german'             => 'de',
+        'portuguese'         => 'pt',
+        'brazilian'          => 'pt',     // WHMCS "Brazilian Portuguese"
+        'chinese'            => 'zh_Hans',
+        'chinesesimp'        => 'zh_Hans',
+        'chinesetrad'        => 'zh_Hant',
+    ];
+
+    /**
+     * CLIENT-SYNC-01: push name/email/locale changes from WHMCS to PanelDNS.
      *
      * Called from the ClientEdit hook whenever a WHMCS client's profile is
      * updated. Finds the client's active paneldns-reseller service and PATCHes
      * the sub-client record. Silently no-ops if the client has no PanelDNS service.
+     *
+     * LOCALE-01: also syncs the WHMCS interface language to the sub-client's
+     * portal locale so the PanelDNS portal renders in the client's language
+     * without them needing to set it manually in the portal.
      */
-    public static function onClientEdit(int $userId, string $firstName, string $lastName, string $email): void
+    public static function onClientEdit(int $userId, string $firstName, string $lastName, string $email, string $language = ''): void
     {
         if ($userId <= 0) return;
 
@@ -225,9 +246,14 @@ class PanelDnsResellerHooks
             if ($subClientId <= 0) return;
 
             $name = trim("{$firstName} {$lastName}");
+
+            // LOCALE-01: map WHMCS language name to ISO locale code.
+            $locale = self::LOCALE_MAP[strtolower(trim($language))] ?? null;
+
             $patch = array_filter([
-                'name'  => $name !== '' ? $name : null,
-                'email' => $email !== '' ? $email : null,
+                'name'   => $name !== '' ? $name : null,
+                'email'  => $email !== '' ? $email : null,
+                'locale' => $locale,
             ], fn ($v) => $v !== null);
 
             if (empty($patch)) return;

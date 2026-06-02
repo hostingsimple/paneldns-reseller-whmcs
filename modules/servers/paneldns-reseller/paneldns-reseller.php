@@ -31,7 +31,7 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '1.5.0');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.6.0');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';
@@ -276,6 +276,8 @@ function paneldns_reseller_ClientAreaAllowedFunctions(): array
         'sso',
         // T1.4 embedded DNS — page renders
         'zones', 'records', 'zone-create', 'zone-import',
+        // EXPORT-01: BIND zone download (GET, streams file + exits)
+        'zone-export',
         // T1.4 embedded DNS — mutations (form POST targets)
         'do-zone-create', 'do-zone-import', 'do-zone-delete',
         'do-record-create', 'do-record-update', 'do-record-delete',

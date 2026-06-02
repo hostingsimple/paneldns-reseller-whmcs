@@ -24,7 +24,15 @@
             <span style="color:#d1d5db;margin:0 6px;">›</span>
             <span style="font-family:monospace;">{$zone.name|escape}</span>
         </h2>
-        <span style="font-size:12px;color:#9ca3af;">{$records|@count} record{if $records|@count != 1}s{/if}</span>
+        <div style="display:flex;align-items:center;gap:12px;">
+            <span style="font-size:12px;color:#9ca3af;">{$records|@count} record{if $records|@count != 1}s{/if}</span>
+            {* EXPORT-01: BIND download link — GET, streams file + exits *}
+            <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=zone-export&zone={$zone.id}"
+               style="font-size:12.5px;color:#6b7280;text-decoration:none;border:1px solid #d1d5db;padding:4px 10px;border-radius:5px;font-weight:500;"
+               title="Download this zone as a BIND-format text file">
+                &#8615; Export (BIND)
+            </a>
+        </div>
     </div>
 </div>
 

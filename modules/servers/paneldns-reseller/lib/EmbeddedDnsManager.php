@@ -70,6 +70,8 @@ class PanelDnsEmbeddedDnsManager
             'records'      => $this->renderRecords(),
             'zone-create'  => $this->renderZoneCreate(),
             'zone-import'  => $this->renderZoneImport(),
+            // EXPORT-01: BIND text download — outputs file directly and exits.
+            'zone-export'  => $this->doZoneExport(),
             // Mutations — these handle the POST then redirect to a list page.
             'do-zone-create'  => $this->doZoneCreate(),
             'do-zone-import'  => $this->doZoneImport(),
@@ -193,6 +195,52 @@ class PanelDnsEmbeddedDnsManager
         $this->rotateCsrf(); // FIX-M5: rotate token after successful mutation.
         $this->flash('success', 'Zone ' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . ' created.');
         return $this->redirectTo('zones');
+    }
+
+    /**
+     * EXPORT-01: stream the zone's BIND-format text as a file download.
+     *
+     * GET ?a=zone-export&zone={id}  — no POST body needed; uses GET param.
+     *
+     * The PanelDNS export endpoint returns text/plain, not JSON, so we check
+     * HTTP status directly via 'status' in the API response rather than 'ok'
+     * (which requires a JSON body with {"ok":true}). The raw body is in 'raw_body'.
+     *
+     * Outputs headers + body and exits. Never returns to the WHMCS template
+     * engine — that's intentional for file downloads. On error (API failure,
+     * ownership check, provider not configured), redirects with a flash message
+     * so the client sees a readable error rather than a garbled download.
+     */
+    private function doZoneExport(): array
+    {
+        $zoneId = (int) ($_GET['zone'] ?? 0);
+        if ($zoneId <= 0) return $this->withFlash('error', 'Zone ID required.', $this->renderZonesList());
+
+        // SEC-OWN: verify this zone belongs to the current sub-client before exporting.
+        $zone = $this->fetchOwnZone($zoneId);
+        if (!$zone) return $this->withFlash('error', 'Zone not found.', $this->renderZonesList());
+
+        $resp = $this->api->get("/api/v1/zones/{$zoneId}/export");
+
+        // The export endpoint returns text/plain; 'ok' is always false for non-JSON.
+        // Accept any 2xx status as success and use 'raw_body' directly.
+        if (($resp['status'] ?? 0) < 200 || ($resp['status'] ?? 0) >= 300 || trim((string) $resp['raw_body']) === '') {
+            return $this->withFlash(
+                'error',
+                'Export failed. The zone may not have a DNS provider configured yet.',
+                $this->renderRecords()
+            );
+        }
+
+        $zoneName = preg_replace('/[^a-z0-9._-]/i', '_', (string) ($zone['name'] ?? 'zone'));
+        $filename = $zoneName . '.zone';
+
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Length: ' . strlen($resp['raw_body']));
+        header('Cache-Control: no-cache, no-store, must-revalidate');
+        echo $resp['raw_body'];
+        exit;
     }
 
     private function doZoneImport(): array
