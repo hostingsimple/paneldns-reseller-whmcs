@@ -13,8 +13,9 @@ if (!defined('WHMCS')) {
 }
 
 require_once __DIR__ . '/PanelDnsApi.php';
-require_once __DIR__ . '/LicenceCheck.php';
-require_once __DIR__ . '/WelcomeMail.php';
+// FIX-C1: LicenceCheck and WelcomeMail live in shared/ — the lib/ paths do not exist.
+require_once __DIR__ . '/../../../shared/LicenceCheck.php';
+require_once __DIR__ . '/../../../shared/WelcomeMail.php';
 require_once __DIR__ . '/EmbeddedDnsManager.php';
 
 class PanelDnsResellerService
@@ -24,7 +25,12 @@ class PanelDnsResellerService
         try {
             return (new self($params))->{$action}();
         } catch (\Throwable $e) {
-            return 'paneldns-reseller: ' . $e->getMessage();
+            // FIX-C2: never surface exception messages to WHMCS return values — they
+            // may contain server hostnames, tokens, or SQL fragments.
+            if (function_exists('logModuleCall')) {
+                logModuleCall('paneldns-reseller', 'error:' . $action, [], get_class($e) . ': ' . $e->getMessage(), '');
+            }
+            return 'paneldns-reseller: provisioning error (see module log).';
         }
     }
 
@@ -35,8 +41,18 @@ class PanelDnsResellerService
     {
         $this->params = $params;
 
+        $hostname = $params['serverhostname'] ?? 'localhost';
+
+        // FIX-H4: SSRF pre-flight — reject hostnames that resolve to private/reserved IPs.
+        $resolved = gethostbyname($hostname);
+        if (
+            filter_var($resolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false
+        ) {
+            throw new \RuntimeException('paneldns-reseller: server hostname resolves to a private/reserved IP address.');
+        }
+
         $baseUrl = ($params['serversecure'] ? 'https' : 'http')
-            . '://' . ($params['serverhostname'] ?? 'localhost')
+            . '://' . $hostname
             . ($params['serverport'] && !in_array((int) $params['serverport'], [80, 443], true)
                 ? ':' . (int) $params['serverport'] : '');
 
@@ -166,7 +182,8 @@ class PanelDnsResellerService
         $id = $this->subClientId();
         if (!$id) return 'success';
 
-        $graceDays = (int) ($this->params['configoption11'] ?? 0);
+        // FIX-L4: clamp grace period to prevent absurdly large values (e.g. 9999 days).
+        $graceDays = min(365, max(0, (int) ($this->params['configoption11'] ?? 0)));
 
         if ($graceDays > 0) {
             // GRACE-01: suspend instead of delete. DailyCronJob processes the
@@ -211,7 +228,12 @@ class PanelDnsResellerService
     public function testConnection(): string
     {
         $sum = $this->api->summary();
-        return $sum['ok'] ? 'success' : ('Auth failed: ' . ($sum['error'] ?: ''));
+        if ($sum['ok']) return 'success';
+        // FIX-M11/FIX-M2: log the real error but return a generic message to WHMCS UI.
+        if (function_exists('logModuleCall')) {
+            logModuleCall('paneldns-reseller', 'testConnection:fail', [], $sum['error'] ?? '', '');
+        }
+        return 'Authentication failed. Check the module log for details.';
     }
 
     public function resyncStatus(): string
@@ -243,7 +265,11 @@ class PanelDnsResellerService
             }
             return ['success' => true, 'redirectUrl' => $resp['data']['login_url']];
         } catch (\Throwable $e) {
-            return ['success' => false, 'errorMsg' => 'paneldns-reseller: ' . $e->getMessage()];
+            // FIX-C2: redact exception detail from SSO error message.
+            if (function_exists('logModuleCall')) {
+                logModuleCall('paneldns-reseller', 'error:clientSso', [], get_class($e) . ': ' . $e->getMessage(), '');
+            }
+            return ['success' => false, 'errorMsg' => 'paneldns-reseller: SSO error (see module log).'];
         }
     }
 
@@ -302,7 +328,11 @@ class PanelDnsResellerService
 
             return ['success' => true, 'redirectUrl' => $resp['data']['login_url']];
         } catch (\Throwable $e) {
-            return ['success' => false, 'errorMsg' => 'paneldns-reseller: ' . $e->getMessage()];
+            // FIX-C2: redact exception detail from admin SSO error message.
+            if (function_exists('logModuleCall')) {
+                logModuleCall('paneldns-reseller', 'error:adminSso', [], get_class($e) . ': ' . $e->getMessage(), '');
+            }
+            return ['success' => false, 'errorMsg' => 'paneldns-reseller: SSO error (see module log).'];
         }
     }
 
@@ -450,7 +480,11 @@ class PanelDnsResellerService
                 ->get()
                 ->all();
         } catch (\Throwable $e) {
-            return 'DB error: ' . $e->getMessage();
+            // FIX-C2: redact exception message — may contain SQL fragments.
+            if (function_exists('logModuleCall')) {
+                logModuleCall('paneldns-reseller', 'error:bulkSync:db', [], get_class($e) . ': ' . $e->getMessage(), '');
+            }
+            return 'DB error — see module log for details.';
         }
 
         if (empty($services)) {

@@ -50,7 +50,7 @@
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px;">
                 <div style="font-size:12px; color:#6b7280; text-transform:uppercase; letter-spacing:.05em;">Zones</div>
                 <div style="font-size:24px; font-weight:700; color:#111827; margin-top:4px;">
-                    {$paneldns_usage.zones}{if $paneldns_limits && $paneldns_limits.zones > 0} <span style="font-size:14px; color:#9ca3af; font-weight:400;">/ {$paneldns_limits.zones}</span>{/if}
+                    {$paneldns_usage.zones|escape}{if $paneldns_limits && $paneldns_limits.zones > 0} <span style="font-size:14px; color:#9ca3af; font-weight:400;">/ {$paneldns_limits.zones|escape}</span>{/if}
                 </div>
                 {if $paneldns_limits && $paneldns_limits.zones > 0}
                     {assign var=pct value=($paneldns_usage.zones * 100 / max(1, $paneldns_limits.zones))}
@@ -63,7 +63,7 @@
             <div style="background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px;">
                 <div style="font-size:12px; color:#6b7280; text-transform:uppercase; letter-spacing:.05em;">Records</div>
                 <div style="font-size:24px; font-weight:700; color:#111827; margin-top:4px;">
-                    {$paneldns_usage.records}{if $paneldns_limits && $paneldns_limits.records > 0} <span style="font-size:14px; color:#9ca3af; font-weight:400;">/ {$paneldns_limits.records}</span>{/if}
+                    {$paneldns_usage.records|escape}{if $paneldns_limits && $paneldns_limits.records > 0} <span style="font-size:14px; color:#9ca3af; font-weight:400;">/ {$paneldns_limits.records|escape}</span>{/if}
                 </div>
             </div>
         </div>

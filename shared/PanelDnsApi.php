@@ -1,5 +1,10 @@
 <?php
 
+// FIX-M19: WHMCS file guard — prevents direct web access to this library file.
+if (!defined('WHMCS')) {
+    die('Access denied.');
+}
+
 /**
  * PanelDnsApi — HTTP client wrapping the PanelDNS Platform + Public APIs.
  *
@@ -38,6 +43,14 @@ class PanelDnsApi
         $this->apiKey    = $apiKey;
         $this->mode      = $mode === self::MODE_PLATFORM ? self::MODE_PLATFORM : self::MODE_RESELLER;
         $this->tlsVerify = $tlsVerify;
+
+        // FIX-M12: warn when HTTP is used — Bearer token transmitted in plaintext.
+        if (str_starts_with($this->baseUrl, 'http://')) {
+            $host = parse_url($this->baseUrl, PHP_URL_HOST) ?? '(unknown)';
+            if (function_exists('logModuleCall')) {
+                logModuleCall('paneldns-reseller', 'PanelDnsApi::WARNING', ['host' => $host], 'API calls over plaintext HTTP — Bearer token transmitted unencrypted.', '');
+            }
+        }
     }
 
     /** Returns the URL prefix used for this mode. */

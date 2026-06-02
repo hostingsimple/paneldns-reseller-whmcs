@@ -100,7 +100,8 @@ class PanelDnsResellerHooks
             if ($action === 'create') {
                 $resp = $api->createZone($domain, $subClientId);
                 if (!($resp['ok'] ?? false)) {
-                    logActivity("PanelDNS: auto-create zone {$domain} for sub-client {$subClientId} failed: " . ($resp['error'] ?? 'unknown'));
+                    // FIX-M20: cap API error strings in logActivity to prevent log injection.
+                    logActivity("PanelDNS: auto-create zone {$domain} for sub-client {$subClientId} failed: " . substr((string) ($resp['error'] ?? 'unknown'), 0, 200));
                 }
                 return;
             }

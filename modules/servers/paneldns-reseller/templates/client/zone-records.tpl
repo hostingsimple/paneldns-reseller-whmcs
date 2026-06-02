@@ -116,11 +116,11 @@
                 <td style="padding:10px 12px;"><span style="display:inline-block;padding:1px 7px;border-radius:8px;background:#e5e7eb;color:#374151;font-size:11px;font-weight:600;font-family:monospace;">{$r.type|escape}</span></td>
                 <td style="padding:10px 12px;font-family:monospace;word-break:break-all;color:#374151;">{$r.content|escape}</td>
                 <td style="padding:10px 12px;text-align:right;color:#6b7280;">{$r.ttl|escape}</td>
-                <td style="padding:10px 12px;text-align:right;color:#6b7280;">{if $r.priority !== null}{$r.priority}{else}—{/if}</td>
+                <td style="padding:10px 12px;text-align:right;color:#6b7280;">{if $r.priority !== null}{$r.priority|escape}{else}—{/if}</td>
                 <td style="padding:10px 12px;text-align:right;white-space:nowrap;">
                     <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=records&zone={$zone.id}&edit={$r.id}" style="color:#0891b2;text-decoration:none;font-size:12.5px;font-weight:500;margin-right:10px;">Edit</a>
                     <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=do-record-delete" style="display:inline;"
-                          onsubmit="return confirm('Delete this {$r.type} record?');">
+                          onsubmit="return confirm('Delete this ' + {$r.type|json_encode} + ' record?');">
                         <input type="hidden" name="csrf" value="{$csrf|escape}">
                         <input type="hidden" name="zone_id" value="{$zone.id}">
                         <input type="hidden" name="record_id" value="{$r.id}">

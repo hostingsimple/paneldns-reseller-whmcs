@@ -41,6 +41,25 @@ class PanelDnsEmbeddedDnsManager
      */
     public function handle(string $action): array
     {
+        // FIX-M6: rate-limit all requests (read + write) to 60 per minute per service.
+        if (class_exists('\WHMCS\Cache\Store')) {
+            try {
+                $rlStore = new \WHMCS\Cache\Store();
+                $rlKey   = 'paneldns_rl_' . $this->subClientId;
+                $hits    = (int) $rlStore->get($rlKey);
+                if ($hits >= 60) {
+                    header('Content-Type: application/json');
+                    echo json_encode(['ok' => false, 'error' => 'Rate limit exceeded.']);
+                    exit;
+                }
+                $rlStore->put($rlKey, $hits + 1, 60);
+            } catch (\Throwable $e) {
+                if (function_exists('logModuleCall')) {
+                    logModuleCall('paneldns-reseller', 'rl_cache_fail', [], $e->getMessage(), '');
+                }
+            }
+        }
+
         // Verify CSRF on mutating requests.
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $this->requireCsrf();
@@ -133,16 +152,26 @@ class PanelDnsEmbeddedDnsManager
         $name = trim((string) ($_POST['name'] ?? ''));
         if ($name === '') return $this->withFlash('error', 'Zone name is required.', $this->renderZoneCreate());
 
+        // FIX-H4: validate zone name — 253 char limit, no consecutive dots, RFC-safe chars only.
+        if (
+            strlen($name) > 253
+            || str_contains($name, '..')
+            || !preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9_\-]|\.[a-zA-Z0-9])*$/', $name)
+        ) {
+            return $this->withFlash('error', 'Invalid zone name.', $this->renderZoneCreate());
+        }
+
         $resp = $this->api->post('/api/v1/zones', [
             'name'          => $name,
             'sub_client_id' => $this->subClientId,
         ]);
 
         if (!$resp['ok']) {
-            return $this->withFlash('error', $resp['error'] ?? 'Failed to create zone.', $this->renderZoneCreate());
+            return $this->withFlash('error', $this->apiError($resp, 'Failed to create zone.'), $this->renderZoneCreate());
         }
 
         // SEC-M01: escape user-supplied name before embedding in flash message.
+        $this->rotateCsrf(); // FIX-M5: rotate token after successful mutation.
         $this->flash('success', 'Zone ' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . ' created.');
         return $this->redirectTo('zones');
     }
@@ -168,10 +197,11 @@ class PanelDnsEmbeddedDnsManager
         ]);
 
         if (!$resp['ok']) {
-            return $this->withFlash('error', 'Import failed: ' . ($resp['error'] ?? 'unknown'), $this->renderZoneImport());
+            return $this->withFlash('error', 'Import failed: ' . $this->apiError($resp), $this->renderZoneImport());
         }
 
         $count = $resp['data']['imported'] ?? '?';
+        $this->rotateCsrf(); // FIX-M5: rotate token after successful mutation.
         $this->flash('success', "Imported {$count} records into the zone.");
         return $this->redirectTo('records', "&zone={$zoneId}");
     }
@@ -185,9 +215,10 @@ class PanelDnsEmbeddedDnsManager
 
         $resp = $this->api->delete("/api/v1/zones/{$zoneId}");
         if (!$resp['ok']) {
-            return $this->withFlash('error', 'Delete failed: ' . ($resp['error'] ?? 'unknown'), $this->renderZonesList());
+            return $this->withFlash('error', 'Delete failed: ' . $this->apiError($resp), $this->renderZonesList());
         }
 
+        $this->rotateCsrf(); // FIX-M5: rotate token after successful mutation.
         $this->flash('success', 'Zone deleted.');
         return $this->redirectTo('zones');
     }
@@ -208,8 +239,9 @@ class PanelDnsEmbeddedDnsManager
         $resp = $this->api->post("/api/v1/zones/{$zoneId}/records", $payload);
 
         if (!$resp['ok']) {
-            $this->flash('error', 'Add record failed: ' . ($resp['error'] ?? 'unknown'));
+            $this->flash('error', 'Add record failed: ' . $this->apiError($resp));
         } else {
+            $this->rotateCsrf(); // FIX-M5: rotate token after successful mutation.
             $this->flash('success', 'Record added.');
         }
         return $this->redirectTo('records', "&zone={$zoneId}");
@@ -223,6 +255,12 @@ class PanelDnsEmbeddedDnsManager
             return $this->withFlash('error', 'Record not found.', $this->renderZonesList());
         }
 
+        // FIX-H3: verify the record belongs to this zone before mutating it.
+        $rec = $this->api->get("/api/v1/zones/{$zoneId}/records/{$recordId}");
+        if (empty($rec['ok'])) {
+            return $this->withFlash('error', 'Record not found.', $this->renderZonesList());
+        }
+
         try {
             $payload = $this->recordPayloadFromPost();
         } catch (\InvalidArgumentException $e) {
@@ -232,8 +270,9 @@ class PanelDnsEmbeddedDnsManager
         $resp = $this->api->patch("/api/v1/zones/{$zoneId}/records/{$recordId}", $payload);
 
         if (!$resp['ok']) {
-            $this->flash('error', 'Update failed: ' . ($resp['error'] ?? 'unknown'));
+            $this->flash('error', 'Update failed: ' . $this->apiError($resp));
         } else {
+            $this->rotateCsrf(); // FIX-M5: rotate token after successful mutation.
             $this->flash('success', 'Record updated.');
         }
         return $this->redirectTo('records', "&zone={$zoneId}");
@@ -247,10 +286,17 @@ class PanelDnsEmbeddedDnsManager
             return $this->withFlash('error', 'Record not found.', $this->renderZonesList());
         }
 
+        // FIX-H3: verify the record belongs to this zone before deleting it.
+        $rec = $this->api->get("/api/v1/zones/{$zoneId}/records/{$recordId}");
+        if (empty($rec['ok'])) {
+            return $this->withFlash('error', 'Record not found.', $this->renderZonesList());
+        }
+
         $resp = $this->api->delete("/api/v1/zones/{$zoneId}/records/{$recordId}");
         if (!$resp['ok']) {
-            $this->flash('error', 'Delete failed: ' . ($resp['error'] ?? 'unknown'));
+            $this->flash('error', 'Delete failed: ' . $this->apiError($resp));
         } else {
+            $this->rotateCsrf(); // FIX-M5: rotate token after successful mutation.
             $this->flash('success', 'Record deleted.');
         }
         return $this->redirectTo('records', "&zone={$zoneId}");
@@ -289,11 +335,23 @@ class PanelDnsEmbeddedDnsManager
                 'Invalid record type: ' . htmlspecialchars($type, ENT_QUOTES, 'UTF-8')
             );
         }
+        $name    = trim((string) ($_POST['name'] ?? '@'));
+        $content = trim((string) ($_POST['content'] ?? ''));
+
+        // FIX-M3/M4: validate name and content lengths and reject control characters.
+        if (strlen($name) > 253 || preg_match('/[\x00-\x1F\x7F]/', $name)) {
+            throw new \InvalidArgumentException('Record name is invalid or too long.');
+        }
+        if (strlen($content) > 4096 || preg_match('/[\x00\r\n]/', $content)) {
+            throw new \InvalidArgumentException('Record content is invalid or too long.');
+        }
+
         return array_filter([
-            'name'     => trim((string) ($_POST['name'] ?? '@')),
+            'name'     => $name,
             'type'     => $type,
-            'content'  => trim((string) ($_POST['content'] ?? '')),
-            'ttl'      => (int) ($_POST['ttl'] ?? 3600),
+            'content'  => $content,
+            // FIX-M4: enforce minimum TTL of 60 seconds server-side.
+            'ttl'      => max(60, (int) ($_POST['ttl'] ?? 3600)),
             'priority' => isset($_POST['priority']) && $_POST['priority'] !== ''
                 ? (int) $_POST['priority']
                 : null,
@@ -306,7 +364,15 @@ class PanelDnsEmbeddedDnsManager
     {
         // SEC-L03: avoid @session_start() — masks misconfig and hides session errors.
         if (session_status() === PHP_SESSION_NONE) { session_start(); }
-        $_SESSION['paneldns_flash'] = ['type' => $type, 'msg' => $msg];
+        // FIX-M1: cap flash message length — prevents excessively long API errors
+        // from leaking to the client area.
+        $_SESSION['paneldns_flash'] = ['type' => $type, 'msg' => substr((string) $msg, 0, 512)];
+    }
+
+    /** FIX-M17: extract and cap API error strings before use in flash messages. */
+    private function apiError(array $resp, string $fallback = 'unknown'): string
+    {
+        return substr((string) ($resp['error'] ?? $fallback), 0, 256);
     }
 
     private function popFlash(): ?array
@@ -359,6 +425,18 @@ class PanelDnsEmbeddedDnsManager
             $_SESSION[$key] = bin2hex(random_bytes(24));
         }
         return $_SESSION[$key];
+    }
+
+    /**
+     * FIX-M5: rotate the CSRF token after each successful mutation to prevent
+     * replay attacks on the same token. The new token is stored in session so the
+     * next page render picks it up via csrfToken().
+     */
+    private function rotateCsrf(): void
+    {
+        if (session_status() === PHP_SESSION_NONE) { session_start(); }
+        $key = 'paneldns_csrf_' . (int) $this->params['serviceid'];
+        $_SESSION[$key] = bin2hex(random_bytes(24));
     }
 
     private function requireCsrf(): void

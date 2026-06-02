@@ -14,7 +14,8 @@
     </div>
     <div style="font-size:13px; color:#9ca3af;">
         Not redirected?
-        <a href="{$redirect_url|escape}" style="color:#0891b2; text-decoration:underline;">Click here to continue</a>.
+        {* FIX-H8: only render the href if the URL starts with https:// — prevents open-redirect via javascript: or other schemes *}
+        <a href="{if $redirect_url|substr:0:8 == 'https://'}{$redirect_url|escape}{else}#{/if}" style="color:#0891b2; text-decoration:underline;">Click here to continue</a>.
     </div>
 </div>
 

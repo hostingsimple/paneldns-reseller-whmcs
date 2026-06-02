@@ -58,7 +58,7 @@
                     <td style="padding:12px;text-align:right;">
                         <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=records&zone={$zone.id}" style="color:#0891b2;text-decoration:none;font-size:13px;font-weight:500;margin-right:10px;">Manage</a>
                         <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=do-zone-delete" style="display:inline;"
-                              onsubmit="return confirm('Delete the entire zone {$zone.name|escape}? This cannot be undone.');">
+                              onsubmit="return confirm('Delete the entire zone ' + {$zone.name|json_encode} + '? This cannot be undone.');">
                             <input type="hidden" name="csrf" value="{$csrf|escape}">
                             <input type="hidden" name="zone_id" value="{$zone.id}">
                             <button type="submit" style="background:none;border:none;color:#dc2626;font-size:13px;cursor:pointer;font-weight:500;">Delete</button>

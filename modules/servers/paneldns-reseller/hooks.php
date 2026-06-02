@@ -20,7 +20,8 @@ if (!defined('WHMCS')) {
 }
 
 require_once __DIR__ . '/lib/PanelDnsApi.php';
-require_once __DIR__ . '/lib/DriftSync.php';
+// FIX-C1: DriftSync lives in shared/ — the lib/ path does not exist.
+require_once __DIR__ . '/../../../shared/DriftSync.php';
 require_once __DIR__ . '/lib/PanelDnsResellerHooks.php';
 
 add_hook('DailyCronJob', 1, function () {

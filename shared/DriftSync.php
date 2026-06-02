@@ -54,7 +54,8 @@ class PanelDnsDriftSync
                 ->limit(self::MAX_PER_RUN)
                 ->get();
         } catch (\Throwable $e) {
-            return ['error' => $e->getMessage()];
+            // FIX-H9: never leak exception messages — they may contain SQL or credentials.
+            return ['error' => get_class($e) . ' (see activity log)'];
         }
 
         foreach ($rows as $row) {

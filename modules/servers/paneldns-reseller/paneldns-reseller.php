@@ -54,6 +54,10 @@ function paneldns_reseller_MetaData(): array
         // Sub-client IDs are stored in tblhosting.dedicatedip — this tells
         // WHMCS which service field to compare against ListAccounts results.
         'ListAccountsUniqueIdentifierField'        => 'dedicatedip',
+        // FIX-M18: ListAccountsProductField tells WHMCS which config option
+        // holds the identifying product field for the Sync tool. configoption1
+        // is Zone Limit — the primary plan discriminator for this module.
+        'ListAccountsProductField'                 => 'configoption1',
     ];
 }
 

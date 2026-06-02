@@ -70,7 +70,9 @@ class PanelDnsWelcomeMail
                     'messagename' => $templateName,
                     'id'          => $serviceId,
                     'customtype'  => 'product',
-                    'customvars'  => base64_encode(serialize($merge)),
+                    // FIX-M4/M10: use json_encode instead of serialize — avoids PHP object
+                    // injection if the value is ever passed to unserialize() downstream.
+                    'customvars'  => base64_encode(json_encode($merge)),
                 ]);
 
                 if (($result['result'] ?? '') !== 'success') {

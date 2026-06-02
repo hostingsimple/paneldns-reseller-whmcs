@@ -33,8 +33,9 @@ class PanelDnsLicenceCheck
     const GRACE_SECONDS = 7 * 86400;
     /** Refresh interval — re-fetch from the server this often. */
     const CACHE_TTL = 86400;
-    /** If the API has been unreachable longer than this, lock. */
-    const STALE_HARD_LOCK = 14 * 86400;
+    /** FIX-H1: reduced from 14 days to 2 days. Faster lock-out when API
+     *  is unreachable, reducing the window where a lapsed licence keeps working. */
+    const STALE_HARD_LOCK = 2 * 86400;
 
     /**
      * Check whether the named module is unlocked for the configured server.
@@ -56,19 +57,22 @@ class PanelDnsLicenceCheck
         $resp = $api->licenceStatus();
         if ($resp['ok']) {
             $payload = $resp['data'] ?? [];
-            self::writeCache($cacheKey, [
-                'fetched_at' => $now,
-                'sub_status' => $payload['sub_status'] ?? 'unknown',
-                'modules'    => $payload['modules_unlocked'] ?? [],
-                'expires_at' => $payload['expires_at'] ?? null,
-                'current_plan' => $payload['current_plan'] ?? null,
-            ]);
-            return self::interpret([
-                'fetched_at' => $now,
-                'sub_status' => $payload['sub_status'] ?? 'unknown',
-                'modules'    => $payload['modules_unlocked'] ?? [],
-                'expires_at' => $payload['expires_at'] ?? null,
-            ], $requiredModule, $now);
+            $subStatus = $payload['sub_status'] ?? 'unknown';
+            // FIX-H1: preserve first_past_due_at from the existing cache so grace
+            // is measured from when past_due was first observed, not from cache age.
+            $firstPastDueAt = ($subStatus === 'past_due' && $cached)
+                ? ($cached['first_past_due_at'] ?? $now)
+                : null;
+            $newCache = [
+                'fetched_at'       => $now,
+                'sub_status'       => $subStatus,
+                'modules'          => $payload['modules_unlocked'] ?? [],
+                'expires_at'       => $payload['expires_at'] ?? null,
+                'current_plan'     => $payload['current_plan'] ?? null,
+                'first_past_due_at' => $firstPastDueAt,
+            ];
+            self::writeCache($cacheKey, $newCache);
+            return self::interpret($newCache, $requiredModule, $now);
         }
 
         // Couldn't reach the server. Fall back to last-known cache if recent enough,
@@ -136,6 +140,10 @@ class PanelDnsLicenceCheck
         };
 
         $reactivationUrl = self::reactivationUrl();
+        // FIX-L3: only accept HTTPS reactivation URLs — reject any other scheme.
+        if (!str_starts_with((string) $reactivationUrl, 'https://')) {
+            $reactivationUrl = '';
+        }
         // SEC-L04: escape the URL before embedding in the banner — value comes from DB.
         $action = $reactivationUrl
             ? 'Reactivate at: ' . htmlspecialchars($reactivationUrl, ENT_QUOTES, 'UTF-8')
@@ -203,9 +211,12 @@ class PanelDnsLicenceCheck
             ];
         }
 
-        // past_due — give 7-day grace from the LAST KNOWN GOOD fetch.
+        // past_due — give 7-day grace from when past_due was FIRST observed.
+        // FIX-H1: use first_past_due_at (set when past_due first appears) rather than
+        // fetched_at, so the grace clock is accurate regardless of cache refresh timing.
         if ($sub === 'past_due' && $hasModule) {
-            $secondsPastDue = $now - $fetched;
+            $firstPastDueAt = $cached['first_past_due_at'] ?? $fetched;
+            $secondsPastDue = $now - $firstPastDueAt;
             if ($secondsPastDue < self::GRACE_SECONDS) {
                 $daysLeft = (int) ceil((self::GRACE_SECONDS - $secondsPastDue) / 86400);
                 return [
@@ -253,6 +264,14 @@ class PanelDnsLicenceCheck
 
     private static function writeCache(string $key, array $value): void
     {
+        // FIX-H1: only write cache if the payload has a valid shape — prevents
+        // caching a malformed API response that could cause interpret() to malfunction.
+        if (
+            !is_string($value['sub_status'] ?? null) || $value['sub_status'] === '' ||
+            !is_array($value['modules'] ?? null)
+        ) {
+            return;
+        }
         try {
             if (class_exists('\\WHMCS\\Cache\\Store')) {
                 $store = new \WHMCS\Cache\Store();
