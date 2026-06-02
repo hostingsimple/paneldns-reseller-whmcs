@@ -12,6 +12,19 @@
 - **Explicit instruction required before any write.**
 - **README.md must be updated with every release.**
 
+## Version history (summary)
+
+| Version | Date | Notes |
+|---|---|---|
+| `1.0.0` | 2026-05-30 | Initial public release (split from paneldns-whmcs) |
+| `1.1.0` | 2026-05-30 | Domain lifecycle automation, addon products, usage/health widgets |
+| `1.2.0` | 2026-05-30 | Bulk sub-client sync, `searchSubClients()` API helper |
+| `1.2.1` | 2026-05-30 | Security hardening — first OWASP audit |
+| `1.3.0` | 2026-05-30 | AdminSingleSignOn, NS card, resend welcome, ListAccounts, ClientEdit hook, grace period |
+| `1.3.1` | 2026-05-30 | SSO redirect fix, ServiceSingleSignOn, UsageUpdate, test suite expansion |
+| `1.4.0` | 2026-05-30 | build.php ZIP fix, SMOKE-TEST.md, dependabot, CI improvements |
+| `1.4.1` | 2026-06-03 | Security hardening — full OWASP re-audit (post-1.2.1 surface) |
+
 ## Overview
 
 A WHMCS provisioning module (server module) that connects a reseller's WHMCS installation
@@ -56,6 +69,18 @@ commit with the message: "sync: update shared/{filename} from paneldns-whmcs"
 - `shared/LicenceCheck.php` — licence verification
 - `shared/DriftSync.php` — daily drift sync logic
 - `shared/WelcomeMail.php` — welcome email helper
+
+## PanelDNS API compatibility
+
+Compatible with **PanelDNS v3.5.x through v3.23.x**.
+
+### New API capabilities available but not yet used
+
+| PanelDNS version | New capability | Potential enhancement |
+|---|---|---|
+| v3.22.0 | `paneldns_sub_clients.locale` | Pass WHMCS client language as `locale` on `POST /api/v1/sub-clients` and `PATCH /api/v1/sub-clients/{id}`. Requires mapping WHMCS language strings (`"english"`, `"french"`) → ISO codes (`"en"`, `"fr"`). |
+
+No module update is required to stay compatible with PanelDNS v3.22.x / v3.23.x.
 
 ## Release Process
 

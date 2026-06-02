@@ -4,6 +4,99 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.4.1] — 2026-06-03
+
+### Security — full OWASP re-audit (post-1.2.1 surface)
+
+Second full security pass covering all code added since v1.2.1. All findings fixed.
+These are new issues — the original v1.2.1 fixes remain in place.
+
+**Critical**
+
+- **`hooks.php` — fatal require path (C-1)** — `require_once __DIR__ . '/lib/DriftSync.php'`
+  pointed at a non-existent path; the shared files live in `shared/` (loaded at build time
+  into `lib/`, but the path was wrong). Changed to
+  `require_once __DIR__ . '/../../../shared/DriftSync.php'` (matching the pattern used for
+  `LicenceCheck.php` and `WelcomeMail.php`). Without this fix the `DailyCronJob` hook
+  fatal-errored every night and DriftSync never ran.
+
+**High**
+
+- **`PanelDnsResellerService` constructor — SSRF pre-flight (H-2)** — hostname accepted
+  without IP validation. Added `gethostbyname($host)` + `filter_var` with
+  `FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE` before any connection is made.
+- **`EmbeddedDnsManager` — zone name not validated (H-4)** — zone names forwarded to
+  `POST /api/v1/zones` without format or length checks. Added
+  `preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9_\-]|\.[a-zA-Z0-9])*$/', $name)` + 253-char limit
+  + consecutive-dot check (`!str_contains($name, '..')`).
+- **`templates/client/zone-records.tpl` — DOM XSS in JS confirm dialog (H-6)** —
+  `{$r.type}` interpolated bare into a JS string literal. Replaced with
+  `{$r.type|json_encode}` so any special chars are JSON-escaped before entering JS context.
+- **`templates/client/zones-list.tpl` — DOM XSS in JS confirm dialog (H-7)** —
+  `{$zone.name|escape}` inside a single-quoted JS string. Replaced with
+  `{$zone.name|json_encode}`. `|escape` is HTML-entity encoding; it does not make a string
+  safe inside a JS string literal.
+- **`templates/client/sso-redirect.tpl` — open redirect via `javascript:` URI (H-8)** —
+  `$redirect_url` rendered directly into `href`. Added Smarty scheme guard:
+  `{if $redirect_url|substr:0:8 == 'https://'}…{else}#{/if}`.
+- **`shared/DriftSync.php` — exception detail leakage (H-9)** — catch blocks passed
+  `$e->getMessage()` to `logActivity()`. SQL fragments or internal paths could appear in
+  the WHMCS activity log. Changed to `get_class($e) . ' (see module log)'`. Full detail
+  still available via `logModuleCall()`.
+
+**Medium**
+
+- **`EmbeddedDnsManager::handle()` — no rate limiting (M-6/M-7)** — client AJAX
+  endpoints could be hammered without restriction. Added sliding-window rate limit:
+  60 req/min per sub-client via `\WHMCS\Cache\Store`. Cache failures are logged via
+  `logModuleCall()` and fail open (logged, not silently bypassed).
+- **`EmbeddedDnsManager` — CSRF token not rotated (M-5)** — the session CSRF token
+  was never refreshed after a successful mutation. Added `rotateCsrf()` called at the
+  end of every successful create/update/delete/import operation.
+- **`templates/client/overview.tpl` — unescaped API output (M-2/M-21)** — usage counts
+  and plan limits received from the PanelDNS API were output bare. All values now use
+  `{|escape}`.
+- **`shared/WelcomeMail.php` — PHP object injection via `serialize()` (M-10)** —
+  welcome-email merge data packed with `serialize()`. Replaced with
+  `base64_encode(json_encode($merge))`. Synced from `paneldns-whmcs/shared/`.
+- **`shared/PanelDnsApi.php` — missing WHMCS file guard (M-19)** — no
+  `if (!defined('WHMCS')) { die('Access denied.'); }` at the top. Guard added. Synced from
+  `paneldns-whmcs/shared/`.
+- **`shared/PanelDnsApi.php` — HTTP plaintext warning (M-12)** — Bearer tokens over
+  `http://` now log a WARNING via `logModuleCall()`.
+- **`EmbeddedDnsManager` — flash messages and API errors uncapped (M-15/M-17)** —
+  flash message stored to session without length cap (reflected to browser). API error
+  strings forwarded from provider without sanitisation. Flash capped at 512 chars;
+  API error strings capped at 256 chars via `apiError()` helper.
+- **`paneldns-reseller.php` — `ListAccountsProductField` missing from `MetaData()` (M-18)** —
+  `ListAccountsProductField => 'configoption1'` added so WHMCS Sync knows which config
+  option carries the plan identifier.
+- **`lib/PanelDnsResellerHooks.php` — API error string in `logActivity()` uncapped (M-20)** —
+  raw API error string (up to full response body) logged to WHMCS activity log.
+  Capped at 200 chars with `substr()`.
+- **`PanelDnsResellerService` — exception detail leakage (M-11)** — `testConnection()`
+  and all catch blocks now log full detail via `logModuleCall()` and return generic
+  user-facing strings only.
+
+**Low**
+
+- **`shared/LicenceCheck.php` — `STALE_HARD_LOCK` too long (H-1)** — stale cached
+  licence trusted for 14 days on network failure. Reduced to 2 days. Grace clock now
+  starts at `first_past_due_at` (stamped on first `past_due` fetch) so a brief network
+  outage never advances the grace window.
+- **`EmbeddedDnsManager` — TTL not lower-bounded (M-4)** — clients could submit TTL=0.
+  TTL now enforced `max(60, (int)$ttl)`.
+- **`PanelDnsResellerService` — grace days not clamped (L-4)** — `configoption10`
+  grace-day value cast to int but not range-checked. Now `min(365, max(0, (int)$graceDays))`.
+
+### Compatibility
+
+No new `paneldns` platform API version required. Compatible with PanelDNS v3.5.x+.
+Shared files (`PanelDnsApi.php`, `LicenceCheck.php`, `DriftSync.php`, `WelcomeMail.php`)
+are in sync with `paneldns-whmcs v0.7.1`.
+
+---
+
 ## [1.4.0] — 2026-05-30
 
 ### Fixed — Critical
