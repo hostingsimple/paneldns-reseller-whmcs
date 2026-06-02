@@ -111,13 +111,16 @@ class PanelDnsEmbeddedDnsManager
         return [
             'templatefile' => 'templates/client/zone-records',
             'vars' => [
-                'zone'       => $zone,
-                'records'    => $records['ok'] ? ($records['data'] ?? []) : [],
-                'error'      => $records['ok'] ? null : ($records['error'] ?? 'Failed to load records'),
-                'service_id' => (int) $this->params['serviceid'],
-                'flash'      => $this->popFlash(),
-                'csrf'       => $this->csrfToken(),
+                'zone'           => $zone,
+                'records'        => $records['ok'] ? ($records['data'] ?? []) : [],
+                'error'          => $records['ok'] ? null : ($records['error'] ?? 'Failed to load records'),
+                'service_id'     => (int) $this->params['serviceid'],
+                'flash'          => $this->popFlash(),
+                'csrf'           => $this->csrfToken(),
                 'edit_record_id' => (int) ($_GET['edit'] ?? 0) ?: null,
+                // NS-CARD-01: pass nameservers so the records page can show
+                // the "point your domain here" card alongside the record editor.
+                'nameservers'    => $this->fetchNameservers(),
             ],
         ];
     }
@@ -159,6 +162,22 @@ class PanelDnsEmbeddedDnsManager
             || !preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9_\-]|\.[a-zA-Z0-9])*$/', $name)
         ) {
             return $this->withFlash('error', 'Invalid zone name.', $this->renderZoneCreate());
+        }
+
+        // QUOTA-01: pre-flight check before the API call so the client sees a
+        // friendly message instead of a generic API error when they're at the limit.
+        $summary = $this->api->get('/api/v1/sub-clients/' . $this->subClientId . '/summary');
+        if ($summary['ok']) {
+            $used  = (int) ($summary['data']['zones_used']  ?? $summary['data']['usage']['active_zones'] ?? 0);
+            $limit = (int) ($summary['data']['zone_limit']  ?? $summary['data']['plan']['zones'] ?? 0);
+            if ($limit > 0 && $used >= $limit) {
+                return $this->withFlash(
+                    'error',
+                    "You've reached your zone limit ({$used}/{$limit}). "
+                    . 'Please contact support to upgrade your plan.',
+                    $this->renderZoneCreate()
+                );
+            }
         }
 
         $resp = $this->api->post('/api/v1/zones', [
@@ -313,6 +332,37 @@ class PanelDnsEmbeddedDnsManager
         if (!$z) return null;
         if ((int) ($z['sub_client_id'] ?? 0) !== $this->subClientId) return null;
         return $z;
+    }
+
+    /**
+     * NS-CARD-01: fetch the org's nameservers for display on DNS pages.
+     * Cached for 5 minutes via WHMCS\Cache\Store so browsing between records
+     * pages does not produce a new API call per page load.
+     *
+     * @return string[] Array of NS hostnames, e.g. ['ns1.example.com', 'ns2.example.com']
+     */
+    private function fetchNameservers(): array
+    {
+        $cacheKey = 'paneldns_ns_' . $this->subClientId;
+        try {
+            if (class_exists('\\WHMCS\\Cache\\Store')) {
+                $cached = (new \WHMCS\Cache\Store)->get($cacheKey);
+                if (is_array($cached)) return $cached;
+            }
+        } catch (\Throwable $e) { /* fall through to live call */ }
+
+        $resp = $this->api->nameservers();
+        $ns   = ($resp['ok'] && !empty($resp['data']['nameservers']))
+            ? (array) $resp['data']['nameservers']
+            : [];
+
+        try {
+            if (class_exists('\\WHMCS\\Cache\\Store')) {
+                (new \WHMCS\Cache\Store)->put($cacheKey, $ns, 300); // 5 minutes
+            }
+        } catch (\Throwable $e) { /* swallow */ }
+
+        return $ns;
     }
 
     /** Cached list of zones belonging to this customer. */

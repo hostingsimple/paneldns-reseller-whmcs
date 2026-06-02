@@ -4,6 +4,34 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.5.0] — 2026-06-03
+
+### Added
+
+- **`InvoicePaymentSuccess` hook — auto-unsuspend on payment (PAY-01)** — when a
+  reseller's WHMCS client pays an overdue invoice, all their Suspended `paneldns-reseller`
+  services are unsuspended in PanelDNS immediately (previously up to 24 hours after
+  payment via the nightly DriftSync). The WHMCS service status is also mirrored back to
+  Active. Implemented in `PanelDnsResellerHooks::onInvoicePaid()`, wired in `hooks.php`.
+  Best-effort per service: one failure does not prevent other services being unsuspended.
+- **Nameservers written to WHMCS service notes on provisioning (NS-NOTES-01)** — after a
+  successful `CreateAccount`, the sub-client's org nameservers are written into the WHMCS
+  service notes field. Support staff can see "point your domain here" values without
+  logging into PanelDNS. Implemented in
+  `PanelDnsResellerService::writeNameserversToServiceNotes()`.
+- **Zone quota pre-flight check in embedded DNS manager (QUOTA-01)** — when a client
+  tries to create a zone in the WHMCS-embedded manager, the module now calls
+  `GET /api/v1/sub-clients/{id}/summary` first and shows a friendly "You've reached your
+  zone limit (N/N) — please contact support to upgrade your plan" message if they are
+  at capacity. Previously clients saw a generic API error.
+- **Nameserver card on DNS records page (NS-CARD-01)** — the green "Your Nameservers"
+  card previously shown only on the overview page is now also rendered at the bottom of
+  the records management page (`zone-records.tpl`). Nameservers are cached 5 minutes
+  per sub-client via `WHMCS\Cache\Store` so browsing between zones doesn't produce
+  extra API calls. Implemented via `PanelDnsEmbeddedDnsManager::fetchNameservers()`.
+
+---
+
 ## [1.4.1] — 2026-06-03
 
 ### Security — full OWASP re-audit (post-1.2.1 surface)

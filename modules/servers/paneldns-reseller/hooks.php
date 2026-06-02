@@ -130,3 +130,24 @@ add_hook('DailyCronJob', 1, function () {
         }
     }
 });
+
+/**
+ * PAY-01: auto-unsuspend a sub-client when a past-due invoice is paid.
+ *
+ * Without this hook, a client who pays their overdue invoice stays suspended
+ * until the next DailyCronJob drift sync (up to 24 hours). This hook fires
+ * immediately on payment and unsuspends right away.
+ *
+ * WHMCS InvoicePaymentSuccess passes 'invoiceid' and 'userid' at the top level.
+ * The hook checks every Suspended paneldns-reseller service for that client,
+ * so it handles the edge case of a client with multiple DNS products.
+ */
+add_hook('InvoicePaymentSuccess', 1, function (array $vars) {
+    try {
+        PanelDnsResellerHooks::onInvoicePaid((int) ($vars['userid'] ?? 0));
+    } catch (\Throwable $e) {
+        if (function_exists('logActivity')) {
+            logActivity('PanelDNS InvoicePaymentSuccess hook crashed: ' . get_class($e));
+        }
+    }
+});

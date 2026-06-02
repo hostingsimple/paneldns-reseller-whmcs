@@ -302,6 +302,66 @@ class PanelDnsResellerHooks
     }
 
     /**
+     * PAY-01: unsuspend all Suspended paneldns-reseller services for a client
+     * when they pay an invoice.
+     *
+     * Deliberately unsuspends regardless of why the service is suspended in WHMCS —
+     * if it was suspended by the operator for a non-payment reason, the next
+     * DailyCronJob drift sync will re-suspend it. Best-effort per service: one
+     * failure does not prevent the others from being processed.
+     *
+     * @param int $userId WHMCS client id from the InvoicePaymentSuccess hook
+     */
+    public static function onInvoicePaid(int $userId): void
+    {
+        if ($userId <= 0) return;
+
+        try {
+            $services = \WHMCS\Database\Capsule::table('tblhosting')
+                ->join('tblservers',  'tblhosting.server',    '=', 'tblservers.id')
+                ->join('tblproducts', 'tblhosting.packageid', '=', 'tblproducts.id')
+                ->where('tblhosting.userid', $userId)
+                ->where('tblhosting.domainstatus', 'Suspended')
+                ->where('tblproducts.servertype', 'paneldns_reseller')
+                ->select([
+                    'tblhosting.id as service_id',
+                    'tblhosting.dedicatedip as sub_client_id',
+                    'tblservers.hostname as server_hostname',
+                    'tblservers.accesshash as server_key',
+                    'tblservers.secure as server_secure',
+                    'tblservers.port as server_port',
+                ])
+                ->get()->all();
+        } catch (\Throwable $e) {
+            logActivity('PanelDNS InvoicePaid: DB query failed (' . get_class($e) . ')');
+            return;
+        }
+
+        foreach ($services as $svc) {
+            $subClientId = (int) $svc->sub_client_id;
+            if ($subClientId <= 0) continue;
+
+            try {
+                $api  = self::apiForServer($svc);
+                $resp = $api->patchSubClient($subClientId, ['status' => 'active']);
+                if ($resp['ok']) {
+                    // Mirror the status change in WHMCS so the service shows Active.
+                    \WHMCS\Database\Capsule::table('tblhosting')
+                        ->where('id', $svc->service_id)
+                        ->update(['domainstatus' => 'Active']);
+                    logActivity("PanelDNS: unsuspended sub-client {$subClientId} (service #{$svc->service_id}) on invoice payment.");
+                } else {
+                    logActivity('PanelDNS InvoicePaid: unsuspend failed for sub-client '
+                        . $subClientId . ' — ' . substr((string) ($resp['error'] ?? 'unknown'), 0, 200));
+                }
+            } catch (\Throwable $e) {
+                logActivity('PanelDNS InvoicePaid: error for service #' . $svc->service_id
+                    . ' (' . get_class($e) . ')');
+            }
+        }
+    }
+
+    /**
      * Build a reseller-mode PanelDnsApi from a joined server row.
      * Expects ->server_hostname, ->server_key (encrypted accesshash),
      * ->server_secure, ->server_port.

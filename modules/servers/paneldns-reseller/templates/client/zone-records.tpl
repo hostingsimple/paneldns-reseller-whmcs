@@ -134,6 +134,19 @@
     </table>
 </div>
 
+{* NS-CARD-01: always show nameservers on the records page so clients know
+   where to point their domains without navigating back to the overview. *}
+{if $nameservers && $nameservers|@count > 0}
+<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 16px;margin-top:14px;">
+    <div style="font-size:11.5px;font-weight:600;color:#166534;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
+        &#x1F310; Point your domain to these nameservers
+    </div>
+    {foreach from=$nameservers item=ns}
+    <div style="font-family:monospace;font-size:13.5px;font-weight:600;color:#111827;padding:3px 0;">{$ns|escape}</div>
+    {/foreach}
+</div>
+{/if}
+
 <div style="margin-top:14px;text-align:center;font-size:12px;color:#9ca3af;">
     Need advanced features?
     <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=sso" style="color:#0891b2;">Open in full DNS portal →</a>

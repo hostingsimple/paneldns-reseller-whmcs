@@ -109,6 +109,29 @@ class PanelDnsResellerService
         return [];
     }
 
+    /**
+     * NS-NOTES-01: write the nameservers for this product into WHMCS service notes.
+     *
+     * Gives support staff instant visibility of "point this domain here" without
+     * needing to log into PanelDNS. Best-effort: failures are swallowed so a
+     * notes-write failure never blocks provisioning.
+     */
+    private function writeNameserversToServiceNotes(): void
+    {
+        $serviceId = (int) ($this->params['serviceid'] ?? 0);
+        if ($serviceId <= 0) return;
+
+        $ns = $this->resolveNameservers();
+        if (empty($ns)) return;
+
+        $note = 'PanelDNS Nameservers:' . PHP_EOL . implode(PHP_EOL, $ns);
+        try {
+            \WHMCS\Database\Capsule::table('tblhosting')
+                ->where('id', $serviceId)
+                ->update(['notes' => $note]);
+        } catch (\Throwable $e) { /* swallow — best-effort */ }
+    }
+
     public function createAccount(): string
     {
         // P2.1: bundled-with-PanelDNS-subscription licence check. Only gates
@@ -153,6 +176,10 @@ class PanelDnsResellerService
         if ($newId <= 0) return 'CreateSubClient succeeded but no id returned.';
 
         $this->setSubClientId($newId);
+
+        // NS-NOTES-01: write the assigned nameservers into the WHMCS service
+        // notes so support staff can see them without logging into PanelDNS.
+        $this->writeNameserversToServiceNotes();
 
         if (($this->params['configoption3'] ?? 'yes') === 'yes') {
             $this->sendWelcomeEmail($newId);
