@@ -4,6 +4,14 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.7.1] — 2026-06-03
+
+### Fixed
+
+- **`shared/PanelDnsApi.php` synced from source of truth** (`paneldns-whmcs`) — comment labels normalised; `parse_url()` fallback in the HTTP warning now uses `'(unknown)'` instead of `$this->baseUrl` (which could expose port numbers in log output).
+
+---
+
 ## [1.7.0] — 2026-06-03
 
 ### Added

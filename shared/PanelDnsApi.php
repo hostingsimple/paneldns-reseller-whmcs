@@ -1,9 +1,7 @@
 <?php
 
-// FIX-M19: WHMCS file guard — prevents direct web access to this library file.
-if (!defined('WHMCS')) {
-    die('Access denied.');
-}
+// M-19: file guard — prevent direct web access outside WHMCS context.
+if (!defined('WHMCS')) { die('Access denied.'); }
 
 /**
  * PanelDnsApi — HTTP client wrapping the PanelDNS Platform + Public APIs.
@@ -44,11 +42,17 @@ class PanelDnsApi
         $this->mode      = $mode === self::MODE_PLATFORM ? self::MODE_PLATFORM : self::MODE_RESELLER;
         $this->tlsVerify = $tlsVerify;
 
-        // FIX-M12: warn when HTTP is used — Bearer token transmitted in plaintext.
+        // M-12: warn when using plaintext HTTP — Bearer token will be transmitted unencrypted.
         if (str_starts_with($this->baseUrl, 'http://')) {
             $host = parse_url($this->baseUrl, PHP_URL_HOST) ?? '(unknown)';
             if (function_exists('logModuleCall')) {
-                logModuleCall('paneldns-reseller', 'PanelDnsApi::WARNING', ['host' => $host], 'API calls over plaintext HTTP — Bearer token transmitted unencrypted.', '');
+                logModuleCall(
+                    'paneldns',
+                    'PanelDnsApi::WARNING',
+                    ['server' => $host],
+                    'API calls over plaintext HTTP — Bearer token transmitted unencrypted',
+                    ''
+                );
             }
         }
     }
@@ -241,9 +245,8 @@ class PanelDnsApi
             'status'   => $status,
             'data'     => is_array($decoded) ? ($decoded['data'] ?? $decoded) : null,
             'error'    => $ok ? null : ($decoded['error'] ?? "HTTP {$status}"),
-            // EXPORT-01: raw body included for non-JSON endpoints (e.g. zone BIND export
-            // returns text/plain). Callers check 'status' directly and read 'raw_body'
-            // rather than relying on 'ok'/'data' for non-JSON responses.
+            // EXPORT-01: raw body for non-JSON endpoints (e.g. zone BIND export returns
+            // text/plain). Callers check 'status' directly and read 'raw_body'.
             'raw_body' => $raw,
         ];
     }
