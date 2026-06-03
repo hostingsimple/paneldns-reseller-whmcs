@@ -72,6 +72,8 @@ class PanelDnsEmbeddedDnsManager
             'zone-import'  => $this->renderZoneImport(),
             // EXPORT-01: BIND text download — outputs file directly and exits.
             'zone-export'  => $this->doZoneExport(),
+            // DNSSEC-01: toggle DNSSEC signing at the DNS provider.
+            'do-dnssec-toggle' => $this->doDnssecToggle(),
             // Mutations — these handle the POST then redirect to a list page.
             'do-zone-create'  => $this->doZoneCreate(),
             'do-zone-import'  => $this->doZoneImport(),
@@ -110,6 +112,11 @@ class PanelDnsEmbeddedDnsManager
 
         $records = $this->api->get("/api/v1/zones/{$zoneId}/records?per_page=200");
 
+        // DNSSEC-01: fetch DNSSEC status for display. Non-fatal — if the zone has
+        // no provider or the provider doesn't support DNSSEC, we pass supported=false
+        // and the template hides the DNSSEC card silently.
+        $dnssec = $this->fetchDnssecStatus($zoneId);
+
         return [
             'templatefile' => 'templates/client/zone-records',
             'vars' => [
@@ -123,6 +130,8 @@ class PanelDnsEmbeddedDnsManager
                 // NS-CARD-01: pass nameservers so the records page can show
                 // the "point your domain here" card alongside the record editor.
                 'nameservers'    => $this->fetchNameservers(),
+                // DNSSEC-01: current signing state + DS records. null if unsupported/no provider.
+                'dnssec'         => $dnssec,
             ],
         ];
     }
@@ -241,6 +250,64 @@ class PanelDnsEmbeddedDnsManager
         header('Cache-Control: no-cache, no-store, must-revalidate');
         echo $resp['raw_body'];
         exit;
+    }
+
+    /**
+     * DNSSEC-01: enable or disable DNSSEC signing on a zone.
+     *
+     * POST ?a=do-dnssec-toggle with zone_id + enable (1|0).
+     * Calls POST /api/v1/zones/{zone}/dnssec {"enable": bool}.
+     * On success, redirects back to the records page with a flash message
+     * that includes the DS records if DNSSEC was just enabled.
+     */
+    private function doDnssecToggle(): array
+    {
+        $zoneId = (int) ($_POST['zone_id'] ?? 0);
+        if (!$this->fetchOwnZone($zoneId)) {
+            return $this->withFlash('error', 'Zone not found.', $this->renderZonesList());
+        }
+
+        $enable = isset($_POST['enable']) && (string) $_POST['enable'] === '1';
+
+        $resp = $this->api->post("/api/v1/zones/{$zoneId}/dnssec", [
+            'enable' => $enable,
+        ]);
+
+        if (!$resp['ok']) {
+            $this->flash('error', 'DNSSEC ' . ($enable ? 'enable' : 'disable') . ' failed: '
+                . $this->apiError($resp, 'Unknown error.'));
+            return $this->redirectTo('records', "&zone={$zoneId}");
+        }
+
+        $this->rotateCsrf();
+        if ($enable) {
+            $this->flash('success', 'DNSSEC enabled. Add the DS records below to your domain registrar to complete setup.');
+        } else {
+            $this->flash('success', 'DNSSEC disabled.');
+        }
+        return $this->redirectTo('records', "&zone={$zoneId}");
+    }
+
+    /**
+     * DNSSEC-01: fetch the current DNSSEC state for a zone.
+     *
+     * Returns null if the zone has no provider or the provider doesn't support
+     * DNSSEC (any non-2xx response). Callers must guard on null before using.
+     *
+     * @return array{enabled: bool, algorithm: string|null, ds_records: string[], last_synced_at: string|null}|null
+     */
+    private function fetchDnssecStatus(int $zoneId): ?array
+    {
+        $resp = $this->api->get("/api/v1/zones/{$zoneId}/dnssec");
+        if (!$resp['ok']) return null;
+        $d = $resp['data'] ?? null;
+        if (!is_array($d)) return null;
+        return [
+            'enabled'        => (bool) ($d['enabled'] ?? false),
+            'algorithm'      => ($d['algorithm'] !== null && $d['algorithm'] !== '') ? (string) $d['algorithm'] : null,
+            'ds_records'     => is_array($d['ds_records']) ? array_values($d['ds_records']) : [],
+            'last_synced_at' => isset($d['last_synced_at']) ? (string) $d['last_synced_at'] : null,
+        ];
     }
 
     private function doZoneImport(): array

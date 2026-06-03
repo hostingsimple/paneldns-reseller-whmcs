@@ -31,7 +31,7 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '1.6.0');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.7.0');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';
@@ -281,5 +281,7 @@ function paneldns_reseller_ClientAreaAllowedFunctions(): array
         // T1.4 embedded DNS — mutations (form POST targets)
         'do-zone-create', 'do-zone-import', 'do-zone-delete',
         'do-record-create', 'do-record-update', 'do-record-delete',
+        // DNSSEC-01: enable/disable DNSSEC signing at the DNS provider
+        'do-dnssec-toggle',
     ];
 }

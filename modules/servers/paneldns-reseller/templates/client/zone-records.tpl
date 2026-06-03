@@ -155,6 +155,62 @@
 </div>
 {/if}
 
+{* DNSSEC-01: DNSSEC signing card. Only shown when the zone has a provider
+   that supports DNSSEC ($dnssec is non-null). Hides silently for provider-less
+   zones or providers that return a non-2xx on the DNSSEC endpoint. *}
+{if $dnssec !== null}
+<div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px 20px;margin-top:14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-size:14px;font-weight:600;color:#111827;">DNSSEC Signing</span>
+            {if $dnssec.enabled}
+            <span style="display:inline-block;padding:2px 9px;border-radius:8px;background:#dcfce7;color:#166534;font-size:11.5px;font-weight:600;">&#10003; Enabled</span>
+            {else}
+            <span style="display:inline-block;padding:2px 9px;border-radius:8px;background:#f3f4f6;color:#6b7280;font-size:11.5px;font-weight:600;">Disabled</span>
+            {/if}
+        </div>
+        <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=do-dnssec-toggle"
+              onsubmit="return confirm('{if $dnssec.enabled}Disable DNSSEC signing on this zone? Remember to remove the DS records from your registrar.{else}Enable DNSSEC signing on this zone?{/if}');">
+            <input type="hidden" name="csrf"    value="{$csrf|escape}">
+            <input type="hidden" name="zone_id" value="{$zone.id}">
+            <input type="hidden" name="enable"  value="{if $dnssec.enabled}0{else}1{/if}">
+            <button type="submit"
+                    style="padding:6px 14px;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;border:1px solid {if $dnssec.enabled}#fca5a5;background:#fee2e2;color:#991b1b{else}#93c5fd;background:#eff6ff;color:#1d4ed8{/if};">
+                {if $dnssec.enabled}Disable DNSSEC{else}Enable DNSSEC{/if}
+            </button>
+        </form>
+    </div>
+
+    {if $dnssec.enabled && $dnssec.ds_records|@count > 0}
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:11.5px;font-weight:600;color:#92400e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">
+            &#x26A0;&#xFE0F; Add these DS records at your domain registrar to complete DNSSEC
+        </div>
+        {foreach from=$dnssec.ds_records item=ds}
+        <div style="font-family:monospace;font-size:12px;color:#1c1917;background:#fff;border:1px solid #fde68a;border-radius:4px;padding:6px 10px;margin-bottom:4px;word-break:break-all;user-select:all;">{$ds|escape}</div>
+        {/foreach}
+        {if $dnssec.algorithm}
+        <div style="font-size:11px;color:#78716c;margin-top:6px;">Algorithm: {$dnssec.algorithm|escape}</div>
+        {/if}
+    </div>
+    {/if}
+
+    {if $dnssec.enabled && $dnssec.ds_records|@count == 0}
+    <div style="font-size:12.5px;color:#6b7280;margin-top:4px;">
+        DNSSEC is enabled. DS records are not yet available — they will appear after the provider has finished signing the zone.
+        Refresh this page in a few seconds to check.
+    </div>
+    {/if}
+
+    {if !$dnssec.enabled}
+    <div style="font-size:12px;color:#9ca3af;margin-top:4px;">
+        Enabling DNSSEC allows resolvers to verify that your DNS records haven't been tampered with.
+        After enabling, add the DS records shown here to your domain registrar.
+    </div>
+    {/if}
+</div>
+{/if}
+
 <div style="margin-top:14px;text-align:center;font-size:12px;color:#9ca3af;">
     Need advanced features?
     <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=sso" style="color:#0891b2;">Open in full DNS portal →</a>

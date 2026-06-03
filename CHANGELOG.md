@@ -4,6 +4,30 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.7.0] — 2026-06-03
+
+### Added
+
+- **DNSSEC card in embedded DNS manager (DNSSEC-01)** — the zone records page now shows a
+  DNSSEC Signing card below the nameserver card. It displays the current enabled/disabled
+  state, an Enable/Disable toggle button (POST `?a=do-dnssec-toggle`), and — when enabled —
+  the DS records that the client must add at their domain registrar to complete the
+  chain-of-trust. Algorithm is shown beneath the DS records. Silently hidden when the zone
+  has no provider or the provider doesn't support DNSSEC. Requires PanelDNS v3.24+.
+- New `doDnssecToggle()` and `fetchDnssecStatus()` methods in `EmbeddedDnsManager`.
+- `'do-dnssec-toggle'` added to `ClientAreaAllowedFunctions`.
+- `renderRecords()` now calls `GET /api/v1/zones/{zone}/dnssec` and passes `$dnssec` var to
+  the template; non-fatal if endpoint returns non-2xx (template hides the card).
+
+### Notes
+
+- Registrar DS record submission is intentionally out of scope — too many registrar API
+  variations. The WHMCS module shows the DS records for manual submission. Full registrar
+  push remains available via the PanelDNS reseller dashboard.
+- Requires `paneldns >= v3.24.0` for the new `/api/v1/zones/{zone}/dnssec` endpoints.
+
+---
+
 ## [1.6.0] — 2026-06-03
 
 ### Added
@@ -24,13 +48,6 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 - **`PanelDnsApi`: `raw_body` in response array** — `request()` now always includes
   `raw_body` in its return. Existing callers are unaffected (they ignore unknown keys).
   Enables the export handler to read text/plain responses without a separate code path.
-
-### Not implemented — DNSSEC toggle
-
-DNSSEC management is not exposed via the `/api/v1` Bearer-token API (only via the portal
-session routes). The DNSSEC toggle in the embedded manager is blocked until
-`GET/POST /api/v1/zones/{zone}/dnssec` is added to the paneldns public API. Tracked for
-a future release.
 
 ---
 
