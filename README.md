@@ -21,6 +21,11 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 
 - **Embedded DNS manager** — clients manage their zones and records directly inside
   the WHMCS client area without leaving your billing portal
+- **DNSSEC signing** — clients can enable/disable DNSSEC on each zone from the record
+  manager; DS records are displayed for submission at the domain registrar (requires
+  PanelDNS 3.24+, silently hidden for older installs or providers without DNSSEC support)
+- **BIND zone export** — clients can download any zone as a BIND-format `.zone` file
+  directly from the record manager
 - **Nameserver card** — the client area always shows the nameservers clients need to
   set at their registrar, so they never need to dig through old welcome emails
 - **Auto-create DNS zones** — when a domain is registered or transferred through
