@@ -85,7 +85,9 @@ class PanelDnsLicenceCheck
 
         return [
             'unlocked'   => false,
-            'reason'     => 'Cannot reach PanelDNS to verify licence: ' . ($resp['error'] ?: 'unknown'),
+            // SEC-M14: generic error — raw cURL errors (hostnames, SSL detail) must not
+            // reach the WHMCS admin banner where they could aid reconnaissance.
+            'reason'     => 'Cannot reach PanelDNS to verify licence. Please try again later.',
             'sub_status' => 'unknown',
             'expires_at' => null,
         ];

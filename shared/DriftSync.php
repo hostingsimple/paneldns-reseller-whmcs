@@ -64,7 +64,8 @@ class PanelDnsDriftSync
                 $stats['checked']++;
             } catch (\Throwable $e) {
                 $stats['errors']++;
-                self::log("drift sync exception on service #{$row->service_id}: " . $e->getMessage());
+                // SEC-M8: log class only — getMessage() may contain SQL, credentials, or file paths
+                self::log("drift sync exception on service #{$row->service_id}: " . get_class($e));
             }
         }
 
@@ -80,9 +81,17 @@ class PanelDnsDriftSync
         $serverParams = self::loadServerParams((int) $row->server_id);
         if (!$serverParams) return false;
 
+        // SEC-H7: SSRF pre-flight — DriftSync builds PanelDnsApi directly (no __construct() guard),
+        // so we validate the hostname here before making the connection.
+        $driftHost     = $serverParams['serverhostname'];
+        $driftResolved = gethostbyname($driftHost);
+        if (filter_var($driftResolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            return false; // skip this service — private/reserved server hostname
+        }
+
         $api = new PanelDnsApi(
             ($serverParams['serversecure'] ? 'https' : 'http')
-                . '://' . $serverParams['serverhostname']
+                . '://' . $driftHost
                 . ($serverParams['serverport'] && !in_array((int) $serverParams['serverport'], [80, 443], true)
                     ? ':' . (int) $serverParams['serverport'] : ''),
             $serverParams['serveraccesshash'] ?? '',
@@ -114,7 +123,10 @@ class PanelDnsDriftSync
         };
 
         if ($expectedWhmcs && $whmcsStatus !== $expectedWhmcs) {
-            self::updateWhmcsStatus((int) $row->service_id, $expectedWhmcs, "drift: upstream={$remoteStatus} whmcs={$whmcsStatus}");
+            // SEC-L: $remoteStatus is API-sourced; escape before interpolating into log string.
+            $safeRemote = htmlspecialchars((string) $remoteStatus, ENT_QUOTES, 'UTF-8');
+            $safeWhmcs  = htmlspecialchars((string) $whmcsStatus,  ENT_QUOTES, 'UTF-8');
+            self::updateWhmcsStatus((int) $row->service_id, $expectedWhmcs, "drift: upstream={$safeRemote} whmcs={$safeWhmcs}");
             return true;
         }
 
@@ -154,7 +166,8 @@ class PanelDnsDriftSync
                 ]);
             self::log("drift fixed", ['service_id' => $serviceId, 'to' => $newStatus, 'reason' => $reason]);
         } catch (\Throwable $e) {
-            self::log("drift apply failed for #{$serviceId}: " . $e->getMessage());
+            // SEC-M8: log class only — getMessage() may contain SQL or credentials
+            self::log("drift apply failed for #{$serviceId}: " . get_class($e));
         }
     }
 

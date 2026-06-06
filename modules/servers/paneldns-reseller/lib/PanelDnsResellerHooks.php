@@ -397,6 +397,13 @@ class PanelDnsResellerHooks
         $secure = (bool) $service->server_secure;
         $port   = (int) $service->server_port;
 
+        // SEC-H7: SSRF pre-flight — validate server hostname before building the API client.
+        // This path bypasses __construct() and constructs PanelDnsApi directly.
+        $hookResolved = gethostbyname($service->server_hostname);
+        if (filter_var($hookResolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            throw new \RuntimeException('paneldns-reseller: server hostname resolves to a private/reserved IP address.');
+        }
+
         $baseUrl = ($secure ? 'https' : 'http')
             . '://' . $service->server_hostname
             . ($port && !in_array($port, [80, 443], true) ? ':' . $port : '');

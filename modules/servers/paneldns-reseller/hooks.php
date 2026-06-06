@@ -30,7 +30,7 @@ add_hook('DailyCronJob', 1, function () {
     } catch (\Throwable $e) {
         if (function_exists('logActivity')) {
             // SEC-L06: log class only — exception messages may contain PII or SQL fragments.
-        logActivity('PanelDNS drift sync (reseller) hook crashed: ' . get_class($e));
+            logActivity('PanelDNS drift sync (reseller) hook crashed: ' . get_class($e));
         }
     }
 });

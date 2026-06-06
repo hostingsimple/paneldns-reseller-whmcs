@@ -4,6 +4,20 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.7.2] — 2026-06-06
+
+### Security — OWASP hardening pass
+
+- **H-7: SSRF pre-flight on server connections** — `PanelDnsResellerService::bulkSyncForServer()`, `DriftSync::reconcile()`, and `PanelDnsResellerHooks::apiForServer()` now resolve the configured server hostname with `gethostbyname()` and reject private/reserved IP ranges before making any connection.
+- **H-8: Generic error in `resyncStatus()`** — returns `'Resync failed. See module log for details.'` instead of forwarding the raw API `error` field.
+- **H-9: Ownership check before size cap in `importZone()`** — zone ownership is now verified before the 512 KB size limit is applied, preventing a size-cap oracle attack on unauthenticated zone IDs.
+- **M-8: DriftSync exception messages** — `$e->getMessage()` replaced with `get_class($e)` in both catch blocks.
+- **M-14: LicenceCheck generic error** — raw cURL error string removed from the licence-failure reason; replaced with a generic message.
+- **DriftSync log sanitization** — API-sourced `$remoteStatus` and `$whmcsStatus` are HTML-escaped before interpolation into the `logActivity()` reason string.
+- **hooks.php indentation fix** — `logActivity()` call in the DailyCronJob catch block was unindented (at column 0 inside an `if` block). Corrected.
+
+---
+
 ## [1.7.1] — 2026-06-03
 
 ### Fixed

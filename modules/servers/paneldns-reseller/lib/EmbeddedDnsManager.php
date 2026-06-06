@@ -316,14 +316,16 @@ class PanelDnsEmbeddedDnsManager
         $bindText = (string) ($_POST['bind'] ?? '');
 
         if ($zoneId <= 0)        return $this->withFlash('error', 'Pick a zone first.', $this->renderZoneImport());
+        // SEC-H9: ownership check BEFORE the size cap — prevents a client from triggering
+        // a 512 KB string allocation on every request simply by submitting a large payload
+        // for a zone ID they do not own.
+        if (!$this->fetchOwnZone($zoneId)) {
+            return $this->withFlash('error', 'Zone not found.', $this->renderZoneImport());
+        }
         if (trim($bindText) === '') return $this->withFlash('error', 'Paste BIND-format zone text.', $this->renderZoneImport());
         // SEC-M03: cap import payload to prevent memory-exhaustion DoS.
         if (strlen($bindText) > 512 * 1024) {
             return $this->withFlash('error', 'Import data too large (max 512 KB).', $this->renderZoneImport());
-        }
-
-        if (!$this->fetchOwnZone($zoneId)) {
-            return $this->withFlash('error', 'Zone not found.', $this->renderZoneImport());
         }
 
         $resp = $this->api->post("/api/v1/zones/{$zoneId}/import", [

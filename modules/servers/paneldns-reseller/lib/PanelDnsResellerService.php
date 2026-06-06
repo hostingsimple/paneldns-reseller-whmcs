@@ -268,7 +268,8 @@ class PanelDnsResellerService
         $id = $this->subClientId();
         if (!$id) return 'No sub-client id.';
         $resp = $this->api->subClientSummary($id);
-        return $resp['ok'] ? 'success' : ($resp['error'] ?: '');
+        // SEC-H8: never return raw API error strings — already logged by PanelDnsApi::logCall()
+        return $resp['ok'] ? 'success' : 'Resync failed. See module log for details.';
     }
 
     /**
@@ -463,8 +464,16 @@ class PanelDnsResellerService
      */
     public static function bulkSyncForServer(array $params): string
     {
+        // SEC-H7: SSRF pre-flight — static method bypasses __construct() pre-flight,
+        // so we validate here before building the API client.
+        $hostname = $params['serverhostname'] ?? 'localhost';
+        $resolved = gethostbyname($hostname);
+        if (filter_var($resolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            return 'Server hostname resolves to a private/reserved IP address.';
+        }
+
         $baseUrl = ($params['serversecure'] ? 'https' : 'http')
-            . '://' . ($params['serverhostname'] ?? 'localhost')
+            . '://' . $hostname
             . ($params['serverport'] && !in_array((int) $params['serverport'], [80, 443], true)
                 ? ':' . (int) $params['serverport'] : '');
 
