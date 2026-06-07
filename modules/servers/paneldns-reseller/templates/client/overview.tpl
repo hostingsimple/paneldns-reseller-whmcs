@@ -5,6 +5,16 @@
 
 <div class="paneldns-client" style="max-width:880px; margin:24px auto;">
 
+    {* CONSENT-R-02: re-consent banner when sub-client terms are behind platform version. *}
+    {if $paneldns_requires_consent && $paneldns_consent_url}
+        <div style="background:#fef3c7; border:1px solid #f59e0b; border-radius:8px; padding:12px 16px; margin-bottom:16px; font-size:13.5px; color:#92400e;">
+            <strong>Action required:</strong> Your account terms have been updated.
+            <a href="{$paneldns_consent_url|escape}" target="_blank" rel="noopener noreferrer" style="color:#92400e; font-weight:600;">
+                Review and accept the updated terms &rarr;
+            </a>
+        </div>
+    {/if}
+
     {if $paneldns_status === 'suspended'}
         <div style="background:#fef3c7; border:1px solid #fbbf24; padding:12px 16px; border-radius:8px; color:#92400e; font-size:13px; margin-bottom:16px;">
             <strong>Suspended.</strong> Your DNS account is currently suspended.

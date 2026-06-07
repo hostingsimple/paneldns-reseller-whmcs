@@ -42,6 +42,14 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
   and catches any divergence between the two systems
 - **Client profile sync** — name and email changes in WHMCS are automatically pushed
   to PanelDNS so both systems stay consistent
+- **Consent at provisioning (GDPR)** — when a sub-client is provisioned, the module
+  fetches the current platform legal version via `GET /api/v1/legal-version` and stamps
+  `terms_acknowledged` + `terms_version` on the new sub-client record, creating a
+  `ConsentRecord` in PanelDNS immediately. Requires PanelDNS 3.48.0+. Soft-fails
+  gracefully if the endpoint is unreachable.
+- **Re-consent banner** — the WHMCS client area shows an amber action-required notice
+  when the sub-client's accepted terms version is behind the current platform version,
+  with a direct SSO link to the portal's acceptance form
 - **WHMCS Sync / ListAccounts** — the WHMCS server Sync tool works out of the box;
   use it to surface orphaned or unprovisioned services
 - **Termination grace period** — optionally suspend a sub-client for N days before

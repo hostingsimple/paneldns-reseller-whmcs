@@ -4,6 +4,26 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.9.0] — 2026-06-07
+
+### Added
+
+- **Consent at sub-client provisioning (GDPR-LEGAL-02)**: `createAccount()` now passes optional `terms_acknowledged: true` and `terms_version` fields (fetched via `GET /api/v1/legal-version`) in the `POST /api/v1/sub-clients` payload when creating a new sub-client. WHMCS-provisioned sub-clients carry a `ConsentRecord` from day one, matching the platform module behaviour. Soft-fail: if the legal-version endpoint is unreachable, provisioning continues without the consent fields rather than blocking the order.
+- **`PanelDnsApi::getLegalVersion()`** updated to call `GET /api/v1/legal-version` (now fully implemented in PanelDNS 3.48.0); returns the version string or empty string on soft-failure.
+- **Re-consent banner (CONSENT-R-03)**: The client area overview shows an amber action-required banner when the sub-client's accepted terms version is behind the current platform version (`requires_consent: true` in the summary response). The banner links directly to the sub-client's authenticated portal session via `portal_sso_url` so the client can review and accept without navigating manually.
+
+---
+
+## [1.8.0] — 2026-06-07
+
+### Added
+
+- **Consent at provisioning (GDPR-LEGAL-01)**: `createAccount()` now fetches the current platform legal version via `GET /api/v1/legal-version` and passes `terms_acknowledged: true` and `terms_version` in the sub-client creation payload. WHMCS-provisioned sub-clients are GDPR-covered immediately at account creation, matching the platform module behaviour. Soft-fail: if the legal-version endpoint is unreachable, provisioning continues without the consent fields rather than blocking the order.
+- **Re-consent banner (CONSENT-R-02)**: The client area overview now shows an amber action-required banner when the sub-client's accepted terms version is behind the current platform version (`requires_consent: true` in the summary response). The banner links directly to the sub-client's authenticated portal session (via `portal_sso_url`) so the client can review and accept without needing to navigate manually.
+- **`PanelDnsApi::getLegalVersion()`**: New method calling `GET /api/v1/legal-version`, returning the version string or empty string on soft-failure. Added to `lib/PanelDnsApi.php` (and the `shared/PanelDnsApi.php` source of truth should be updated to match).
+
+---
+
 ## [1.7.2] — 2026-06-06
 
 ### Security — OWASP hardening pass

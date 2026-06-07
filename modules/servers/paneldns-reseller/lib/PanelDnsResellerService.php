@@ -161,14 +161,24 @@ class PanelDnsResellerService
             ? (int) $this->params['configoptions']['Max Records Per Zone']
             : (int) ($this->params['configoption2'] ?? 100);
 
-        $resp = $this->api->createSubClient([
+        // GDPR-LEGAL-01: stamp consent at provisioning time so WHMCS-created
+        // sub-clients are covered from the moment of account creation.
+        $legalVersion = $this->api->getLegalVersion();
+
+        $createPayload = [
             'name'        => $clientName,
             'email'       => $this->params['clientsdetails']['email'] ?? '',
             'password'    => $this->params['password'] ?: bin2hex(random_bytes(12)),
             'zone_limit'  => $zoneLimit,
             'max_records' => $maxRecords,
             'status'      => 'active',
-        ]);
+            'terms_acknowledged' => true,
+        ];
+        if ($legalVersion !== '') {
+            $createPayload['terms_version'] = $legalVersion;
+        }
+
+        $resp = $this->api->createSubClient($createPayload);
 
         if (!$resp['ok']) return $resp['error'] ?: 'CreateSubClient failed.';
 
@@ -852,6 +862,10 @@ class PanelDnsResellerService
         $vars['paneldns_limits']      = $data['limits'] ?? null;
         // NS-01: always show nameservers so clients know where to point their domains.
         $vars['paneldns_nameservers'] = $svc->resolveNameservers();
+
+        // CONSENT-R-02: show re-consent notice if sub-client hasn't accepted current terms.
+        $vars['paneldns_requires_consent'] = (bool) ($data['sub_client']['requires_consent'] ?? false);
+        $vars['paneldns_consent_url']      = $data['sub_client']['portal_sso_url'] ?? '';
 
         // Feature 6 — zone health widget: fetch up to 20 zones and surface
         // only the ones that are NOT active so the client sees problems first.
