@@ -4,6 +4,21 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.9.1] — 2026-06-16
+
+### Fixed
+- **Coexistence with the `paneldns-platform` WHMCS module.** The two modules bundled
+  identically-named global classes (`PanelDnsApi`, `PanelDnsDriftSync`, `PanelDnsWelcomeMail`,
+  `PanelDnsLicenceCheck`), so installing both on one WHMCS fataled with **"Cannot redeclare
+  class"** (both `hooks.php` `require` them at global scope on every page). This module's
+  classes are now prefixed **`PanelDnsReseller*`** so they can never collide with the platform
+  module, and each shared class is wrapped in a `class_exists()` guard (belt-and-braces against
+  the bundled `shared/` + `lib/` copies double-loading). The platform module is unchanged. You
+  can now run both — platform to sell reseller accounts, this one to sell DNS to end users.
+  (Version define synced from a stale 1.7.2 to the 1.9.x line.)
+
+---
+
 ## [1.9.0] — 2026-06-07
 
 ### Added

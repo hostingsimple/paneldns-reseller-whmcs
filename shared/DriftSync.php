@@ -1,7 +1,7 @@
 <?php
 
 /**
- * DriftSync — daily reconciliation between WHMCS service state and the
+ * PanelDnsResellerDriftSync — daily reconciliation between WHMCS service state and the
  * upstream PanelDNS state.
  *
  * Catches three classes of drift:
@@ -25,7 +25,8 @@ if (!defined('WHMCS')) {
     die('Access denied.');
 }
 
-class PanelDnsDriftSync
+if (!class_exists('PanelDnsResellerDriftSync', false)) {
+class PanelDnsResellerDriftSync
 {
     const MAX_PER_RUN = 100;
 
@@ -81,7 +82,7 @@ class PanelDnsDriftSync
         $serverParams = self::loadServerParams((int) $row->server_id);
         if (!$serverParams) return false;
 
-        // SEC-H7: SSRF pre-flight — DriftSync builds PanelDnsApi directly (no __construct() guard),
+        // SEC-H7: SSRF pre-flight — PanelDnsResellerDriftSync builds PanelDnsResellerApi directly (no __construct() guard),
         // so we validate the hostname here before making the connection.
         $driftHost     = $serverParams['serverhostname'];
         $driftResolved = gethostbyname($driftHost);
@@ -89,13 +90,13 @@ class PanelDnsDriftSync
             return false; // skip this service — private/reserved server hostname
         }
 
-        $api = new PanelDnsApi(
+        $api = new PanelDnsResellerApi(
             ($serverParams['serversecure'] ? 'https' : 'http')
                 . '://' . $driftHost
                 . ($serverParams['serverport'] && !in_array((int) $serverParams['serverport'], [80, 443], true)
                     ? ':' . (int) $serverParams['serverport'] : ''),
             $serverParams['serveraccesshash'] ?? '',
-            $row->servertype === 'paneldns-platform' ? PanelDnsApi::MODE_PLATFORM : PanelDnsApi::MODE_RESELLER,
+            $row->servertype === 'paneldns-platform' ? PanelDnsResellerApi::MODE_PLATFORM : PanelDnsResellerApi::MODE_RESELLER,
             (bool) $serverParams['serversecure']
         );
 
@@ -174,8 +175,9 @@ class PanelDnsDriftSync
     private static function log($msg, $ctx = []): void
     {
         if (function_exists('logActivity')) {
-            logActivity('PanelDNS DriftSync: ' . (is_array($msg) ? json_encode($msg) : $msg)
+            logActivity('PanelDNS PanelDnsResellerDriftSync: ' . (is_array($msg) ? json_encode($msg) : $msg)
                 . (!empty($ctx) ? ' ' . json_encode($ctx) : ''));
         }
     }
+}
 }

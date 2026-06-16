@@ -4,7 +4,7 @@
  * paneldns-reseller module hooks.
  *
  * DailyCronJob fires drift reconciliation. Both modules' hooks are
- * idempotent — DriftSync filters by servertype internally, so it only
+ * idempotent — PanelDnsResellerDriftSync filters by servertype internally, so it only
  * touches its own services regardless of which hook fires first.
  *
  * If both modules are installed, both hooks fire (in order priority 1)
@@ -20,13 +20,13 @@ if (!defined('WHMCS')) {
 }
 
 require_once __DIR__ . '/lib/PanelDnsApi.php';
-// FIX-C1: DriftSync lives in shared/ — the lib/ path does not exist.
+// FIX-C1: PanelDnsResellerDriftSync lives in shared/ — the lib/ path does not exist.
 require_once __DIR__ . '/../../../shared/DriftSync.php';
 require_once __DIR__ . '/lib/PanelDnsResellerHooks.php';
 
 add_hook('DailyCronJob', 1, function () {
     try {
-        PanelDnsDriftSync::run();
+        PanelDnsResellerDriftSync::run();
     } catch (\Throwable $e) {
         if (function_exists('logActivity')) {
             // SEC-L06: log class only — exception messages may contain PII or SQL fragments.

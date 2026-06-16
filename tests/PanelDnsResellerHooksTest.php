@@ -36,7 +36,7 @@ final class PanelDnsResellerHooksTest extends TestCase
         $libDir  = __DIR__ . '/../modules/servers/paneldns-reseller/lib';
         $libFile = $libDir . '/PanelDnsApi.php';
         if (!file_exists($libFile)) {
-            file_put_contents($libFile, "<?php // forwarded by test bootstrap — PanelDnsApi already loaded\n");
+            file_put_contents($libFile, "<?php // forwarded by test bootstrap — PanelDnsResellerApi already loaded\n");
         }
 
         require_once __DIR__ . '/../modules/servers/paneldns-reseller/lib/PanelDnsResellerHooks.php';

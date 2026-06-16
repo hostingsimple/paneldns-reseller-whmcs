@@ -21,13 +21,13 @@ if (!function_exists('localAPI')) {
     function localAPI(string $command, array $vars = []): array
     {
         // Tests can override this by pre-defining the function or by stubbing
-        // PanelDnsWelcomeMail::send. Default returns success so welcome-email
+        // PanelDnsResellerWelcomeMail::send. Default returns success so welcome-email
         // tests don't fail.
         return ['result' => 'success'];
     }
 }
 
-// Stub WHMCS Cache namespace so LicenceCheck's optional Cache calls don't fatal.
+// Stub WHMCS Cache namespace so PanelDnsResellerLicenceCheck's optional Cache calls don't fatal.
 if (!class_exists('\\WHMCS\\Cache\\Store', false)) {
     eval('
         namespace WHMCS\\Cache;

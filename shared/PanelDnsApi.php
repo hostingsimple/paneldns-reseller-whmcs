@@ -4,7 +4,7 @@
 if (!defined('WHMCS')) { die('Access denied.'); }
 
 /**
- * PanelDnsApi — HTTP client wrapping the PanelDNS Platform + Public APIs.
+ * PanelDnsResellerApi — HTTP client wrapping the PanelDNS Platform + Public APIs.
  *
  * Used by both paneldns-platform (operator tier, /platform/v1) and
  * paneldns-reseller (reseller tier, /api/v1) WHMCS server modules. The
@@ -24,7 +24,8 @@ if (!defined('WHMCS_PANELDNS_API_VERSION')) {
     define('WHMCS_PANELDNS_API_VERSION', '0.1.0');
 }
 
-class PanelDnsApi
+if (!class_exists('PanelDnsResellerApi', false)) {
+class PanelDnsResellerApi
 {
     const MODE_PLATFORM = 'platform';
     const MODE_RESELLER = 'reseller';
@@ -48,7 +49,7 @@ class PanelDnsApi
             if (function_exists('logModuleCall')) {
                 logModuleCall(
                     'paneldns',
-                    'PanelDnsApi::WARNING',
+                    'PanelDnsResellerApi::WARNING',
                     ['server' => $host],
                     'API calls over plaintext HTTP — Bearer token transmitted unencrypted',
                     ''
@@ -65,7 +66,7 @@ class PanelDnsApi
 
     /**
      * Stable opaque identifier for THIS server+key+mode tuple. Used for
-     * cache keys (LicenceCheck) so two servers with different keys don't
+     * cache keys (PanelDnsResellerLicenceCheck) so two servers with different keys don't
      * collide and the same server consistently hits the same cache entry
      * across requests. Never includes the raw key.
      */
@@ -319,4 +320,5 @@ class PanelDnsApi
         }
         return false;
     }
+}
 }

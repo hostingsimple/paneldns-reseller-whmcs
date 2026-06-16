@@ -3,7 +3,7 @@
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \PanelDnsLicenceCheck
+ * @covers \PanelDnsResellerLicenceCheck
  */
 final class LicenceCheckTest extends TestCase
 {
@@ -11,12 +11,12 @@ final class LicenceCheckTest extends TestCase
 
     public function test_active_subscription_unlocks_module(): void
     {
-        $r = PanelDnsLicenceCheck::interpret([
+        $r = PanelDnsResellerLicenceCheck::interpret([
             'fetched_at' => self::NOW,
             'sub_status' => 'active',
             'modules'    => ['whmcs-platform', 'whmcs-reseller'],
             'expires_at' => null,
-        ], PanelDnsLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
+        ], PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
 
         $this->assertTrue($r['unlocked']);
         $this->assertStringContainsString('active', $r['reason']);
@@ -24,12 +24,12 @@ final class LicenceCheckTest extends TestCase
 
     public function test_trialing_subscription_unlocks_module(): void
     {
-        $r = PanelDnsLicenceCheck::interpret([
+        $r = PanelDnsResellerLicenceCheck::interpret([
             'fetched_at' => self::NOW,
             'sub_status' => 'trialing',
             'modules'    => ['whmcs-platform', 'whmcs-reseller'],
             'expires_at' => '2026-12-31T00:00:00Z',
-        ], PanelDnsLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
+        ], PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
 
         $this->assertTrue($r['unlocked']);
         $this->assertSame('trialing', $r['sub_status']);
@@ -37,12 +37,12 @@ final class LicenceCheckTest extends TestCase
 
     public function test_past_due_within_grace_unlocks(): void
     {
-        $r = PanelDnsLicenceCheck::interpret([
+        $r = PanelDnsResellerLicenceCheck::interpret([
             'fetched_at' => self::NOW - 86400, // 1 day past due
             'sub_status' => 'past_due',
             'modules'    => ['whmcs-platform', 'whmcs-reseller'],
             'expires_at' => null,
-        ], PanelDnsLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
+        ], PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
 
         $this->assertTrue($r['unlocked']);
         $this->assertStringContainsString('grace', $r['reason']);
@@ -51,12 +51,12 @@ final class LicenceCheckTest extends TestCase
 
     public function test_past_due_past_grace_locks(): void
     {
-        $r = PanelDnsLicenceCheck::interpret([
+        $r = PanelDnsResellerLicenceCheck::interpret([
             'fetched_at' => self::NOW - (8 * 86400), // 8 days past due, grace = 7
             'sub_status' => 'past_due',
             'modules'    => ['whmcs-platform', 'whmcs-reseller'],
             'expires_at' => null,
-        ], PanelDnsLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
+        ], PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
 
         $this->assertFalse($r['unlocked']);
         $this->assertStringContainsString('grace period expired', $r['reason']);
@@ -64,24 +64,24 @@ final class LicenceCheckTest extends TestCase
 
     public function test_cancelled_locks(): void
     {
-        $r = PanelDnsLicenceCheck::interpret([
+        $r = PanelDnsResellerLicenceCheck::interpret([
             'fetched_at' => self::NOW,
             'sub_status' => 'cancelled',
             'modules'    => [],
             'expires_at' => null,
-        ], PanelDnsLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
+        ], PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
 
         $this->assertFalse($r['unlocked']);
     }
 
     public function test_free_subscription_locks(): void
     {
-        $r = PanelDnsLicenceCheck::interpret([
+        $r = PanelDnsResellerLicenceCheck::interpret([
             'fetched_at' => self::NOW,
             'sub_status' => 'free',
             'modules'    => [],
             'expires_at' => null,
-        ], PanelDnsLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
+        ], PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
 
         $this->assertFalse($r['unlocked']);
         $this->assertSame('free', $r['sub_status']);
@@ -91,12 +91,12 @@ final class LicenceCheckTest extends TestCase
     {
         // Active sub but the API forgot to include 'whmcs-reseller' in modules_unlocked.
         // Should lock — defence in depth.
-        $r = PanelDnsLicenceCheck::interpret([
+        $r = PanelDnsResellerLicenceCheck::interpret([
             'fetched_at' => self::NOW,
             'sub_status' => 'active',
             'modules'    => ['whmcs-platform'],   // reseller MISSING
             'expires_at' => null,
-        ], PanelDnsLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
+        ], PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
 
         $this->assertFalse($r['unlocked']);
         $this->assertStringContainsString('module not unlocked', $r['reason']);
@@ -104,12 +104,12 @@ final class LicenceCheckTest extends TestCase
 
     public function test_unknown_status_locks(): void
     {
-        $r = PanelDnsLicenceCheck::interpret([
+        $r = PanelDnsResellerLicenceCheck::interpret([
             'fetched_at' => self::NOW,
             'sub_status' => 'unknown',
             'modules'    => [],
             'expires_at' => null,
-        ], PanelDnsLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
+        ], PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
 
         $this->assertFalse($r['unlocked']);
     }
@@ -117,12 +117,12 @@ final class LicenceCheckTest extends TestCase
     public function test_grace_boundary_exact_seven_days_locks(): void
     {
         // 7 days * 86400 = 604800. Anything >= 604800 is past grace.
-        $r = PanelDnsLicenceCheck::interpret([
+        $r = PanelDnsResellerLicenceCheck::interpret([
             'fetched_at' => self::NOW - (7 * 86400),
             'sub_status' => 'past_due',
             'modules'    => ['whmcs-platform', 'whmcs-reseller'],
             'expires_at' => null,
-        ], PanelDnsLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
+        ], PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER, self::NOW);
 
         $this->assertFalse($r['unlocked']);
     }
@@ -131,7 +131,7 @@ final class LicenceCheckTest extends TestCase
 
     public function test_formatErrorBanner_cancelled(): void
     {
-        $banner = PanelDnsLicenceCheck::formatErrorBanner([
+        $banner = PanelDnsResellerLicenceCheck::formatErrorBanner([
             'unlocked'   => false,
             'sub_status' => 'cancelled',
             'expires_at' => '2026-05-20T00:00:00Z',
@@ -146,7 +146,7 @@ final class LicenceCheckTest extends TestCase
 
     public function test_formatErrorBanner_past_due(): void
     {
-        $banner = PanelDnsLicenceCheck::formatErrorBanner([
+        $banner = PanelDnsResellerLicenceCheck::formatErrorBanner([
             'unlocked'   => false,
             'sub_status' => 'past_due',
             'expires_at' => null,
@@ -159,7 +159,7 @@ final class LicenceCheckTest extends TestCase
 
     public function test_formatErrorBanner_free(): void
     {
-        $banner = PanelDnsLicenceCheck::formatErrorBanner([
+        $banner = PanelDnsResellerLicenceCheck::formatErrorBanner([
             'unlocked'   => false,
             'sub_status' => 'free',
             'expires_at' => null,
@@ -172,7 +172,7 @@ final class LicenceCheckTest extends TestCase
 
     public function test_formatErrorBanner_unknown(): void
     {
-        $banner = PanelDnsLicenceCheck::formatErrorBanner([
+        $banner = PanelDnsResellerLicenceCheck::formatErrorBanner([
             'unlocked'   => false,
             'sub_status' => 'unknown',
             'expires_at' => null,
@@ -185,7 +185,7 @@ final class LicenceCheckTest extends TestCase
 
     public function test_formatErrorBanner_falls_back_when_no_reactivation_url(): void
     {
-        $banner = PanelDnsLicenceCheck::formatErrorBanner([
+        $banner = PanelDnsResellerLicenceCheck::formatErrorBanner([
             'unlocked'   => false,
             'sub_status' => 'cancelled',
             'expires_at' => null,

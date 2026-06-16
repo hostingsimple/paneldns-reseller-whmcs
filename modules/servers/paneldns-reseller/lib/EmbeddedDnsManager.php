@@ -22,11 +22,11 @@ if (!defined('WHMCS')) {
 
 class PanelDnsEmbeddedDnsManager
 {
-    /** @var PanelDnsApi */ private $api;
+    /** @var PanelDnsResellerApi */ private $api;
     /** @var int */         private $subClientId;
     /** @var array */       private $params;
 
-    public function __construct(PanelDnsApi $api, int $subClientId, array $params)
+    public function __construct(PanelDnsResellerApi $api, int $subClientId, array $params)
     {
         $this->api = $api;
         $this->subClientId = $subClientId;

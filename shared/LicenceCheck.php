@@ -1,7 +1,7 @@
 <?php
 
 /**
- * LicenceCheck — verifies the WHMCS install is bundled with an active
+ * PanelDnsResellerLicenceCheck — verifies the WHMCS install is bundled with an active
  * PanelDNS subscription, with a 7-day grace period for past_due.
  *
  * Behavior:
@@ -24,7 +24,7 @@ if (!defined('WHMCS')) {
     die('Access denied.');
 }
 
-class PanelDnsLicenceCheck
+class PanelDnsResellerLicenceCheck
 {
     const REQUIRED_MODULE_PLATFORM = 'whmcs-platform';
     const REQUIRED_MODULE_RESELLER = 'whmcs-reseller';
@@ -42,7 +42,7 @@ class PanelDnsLicenceCheck
      *
      * @return array{unlocked:bool, reason:string, sub_status:string, expires_at:?string}
      */
-    public static function check(PanelDnsApi $api, string $requiredModule): array
+    public static function check(PanelDnsResellerApi $api, string $requiredModule): array
     {
         $cacheKey = self::cacheKey($api);
         $cached   = self::readCache($cacheKey);
@@ -107,7 +107,7 @@ class PanelDnsLicenceCheck
      * addon module's configured value (operator sets it in
      * Setup → Addon Modules → PanelDNS → Reactivation URL).
      */
-    public static function gateOrError(PanelDnsApi $api, string $requiredModule): ?string
+    public static function gateOrError(PanelDnsResellerApi $api, string $requiredModule): ?string
     {
         $result = self::check($api, $requiredModule);
         if ($result['unlocked']) return null;
@@ -245,7 +245,7 @@ class PanelDnsLicenceCheck
         ];
     }
 
-    private static function cacheKey(PanelDnsApi $api): string
+    private static function cacheKey(PanelDnsResellerApi $api): string
     {
         // Stable per-server identifier — same key across requests for the
         // same server+credential tuple. Never embeds the raw API key.

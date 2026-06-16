@@ -3,10 +3,10 @@
 use PHPUnit\Framework\TestCase;
 
 /**
- * Tests for security-sensitive private methods on PanelDnsApi.
+ * Tests for security-sensitive private methods on PanelDnsResellerApi.
  * Uses Reflection so the production class stays clean (private visibility).
  *
- * @covers \PanelDnsApi
+ * @covers \PanelDnsResellerApi
  */
 final class PanelDnsApiSecurityTest extends TestCase
 {
@@ -112,15 +112,15 @@ final class PanelDnsApiSecurityTest extends TestCase
 
     private function callIsPrivateIp(string $ip): bool
     {
-        $ref = new ReflectionMethod(PanelDnsApi::class, 'isPrivateIp');
+        $ref = new ReflectionMethod(PanelDnsResellerApi::class, 'isPrivateIp');
         $ref->setAccessible(true);
         return $ref->invoke(null, $ip);
     }
 
     private function callRedactUrl(string $url): string
     {
-        $api = new PanelDnsApi('https://example.com', 'key', PanelDnsApi::MODE_RESELLER);
-        $ref = new ReflectionMethod(PanelDnsApi::class, 'redactUrl');
+        $api = new PanelDnsResellerApi('https://example.com', 'key', PanelDnsResellerApi::MODE_RESELLER);
+        $ref = new ReflectionMethod(PanelDnsResellerApi::class, 'redactUrl');
         $ref->setAccessible(true);
         return $ref->invoke($api, $url);
     }

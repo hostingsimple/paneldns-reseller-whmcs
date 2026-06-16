@@ -13,7 +13,7 @@ if (!defined('WHMCS')) {
 }
 
 require_once __DIR__ . '/PanelDnsApi.php';
-// FIX-C1: LicenceCheck and WelcomeMail live in shared/ — the lib/ paths do not exist.
+// FIX-C1: PanelDnsResellerLicenceCheck and PanelDnsResellerWelcomeMail live in shared/ — the lib/ paths do not exist.
 require_once __DIR__ . '/../../../shared/LicenceCheck.php';
 require_once __DIR__ . '/../../../shared/WelcomeMail.php';
 require_once __DIR__ . '/EmbeddedDnsManager.php';
@@ -35,7 +35,7 @@ class PanelDnsResellerService
     }
 
     /** @var array */ private $params;
-    /** @var PanelDnsApi */ private $api;
+    /** @var PanelDnsResellerApi */ private $api;
 
     private function __construct(array $params)
     {
@@ -56,10 +56,10 @@ class PanelDnsResellerService
             . ($params['serverport'] && !in_array((int) $params['serverport'], [80, 443], true)
                 ? ':' . (int) $params['serverport'] : '');
 
-        $this->api = new PanelDnsApi(
+        $this->api = new PanelDnsResellerApi(
             $baseUrl,
             $params['serveraccesshash'] ?? '',
-            PanelDnsApi::MODE_RESELLER,
+            PanelDnsResellerApi::MODE_RESELLER,
             (bool) ($params['serversecure'] ?? true)
         );
     }
@@ -138,7 +138,7 @@ class PanelDnsResellerService
         // CreateAccount — existing services keep working even if the
         // reseller's PanelDNS subscription lapses (so their customers don't
         // lose DNS overnight). 7-day grace for past_due.
-        if ($err = PanelDnsLicenceCheck::gateOrError($this->api, PanelDnsLicenceCheck::REQUIRED_MODULE_RESELLER)) {
+        if ($err = PanelDnsResellerLicenceCheck::gateOrError($this->api, PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER)) {
             return $err;
         }
 
@@ -225,7 +225,7 @@ class PanelDnsResellerService
         if ($graceDays > 0) {
             // GRACE-01: suspend instead of delete. DailyCronJob processes the
             // actual deletion once the deadline passes. Terminated WHMCS services
-            // are excluded from DriftSync so the suspension is not reversed.
+            // are excluded from PanelDnsResellerDriftSync so the suspension is not reversed.
             $resp = $this->api->patchSubClient($id, ['status' => 'suspended']);
             if (!$resp['ok']) return $resp['error'] ?: 'Grace-period suspend failed.';
 
@@ -278,7 +278,7 @@ class PanelDnsResellerService
         $id = $this->subClientId();
         if (!$id) return 'No sub-client id.';
         $resp = $this->api->subClientSummary($id);
-        // SEC-H8: never return raw API error strings — already logged by PanelDnsApi::logCall()
+        // SEC-H8: never return raw API error strings — already logged by PanelDnsResellerApi::logCall()
         return $resp['ok'] ? 'success' : 'Resync failed. See module log for details.';
     }
 
@@ -402,7 +402,7 @@ class PanelDnsResellerService
         $soaEmail = trim((string) ($this->params['configoption8'] ?? ''));
         if ($soaEmail !== '') $context['soa_email'] = $soaEmail;
 
-        PanelDnsWelcomeMail::sendReseller((int) $this->params['serviceid'], $sso['data'], $context);
+        PanelDnsResellerWelcomeMail::sendReseller((int) $this->params['serviceid'], $sso['data'], $context);
         return 'success';
     }
 
@@ -487,10 +487,10 @@ class PanelDnsResellerService
             . ($params['serverport'] && !in_array((int) $params['serverport'], [80, 443], true)
                 ? ':' . (int) $params['serverport'] : '');
 
-        $api = new PanelDnsApi(
+        $api = new PanelDnsResellerApi(
             $baseUrl,
             $params['serveraccesshash'] ?? '',
-            PanelDnsApi::MODE_RESELLER,
+            PanelDnsResellerApi::MODE_RESELLER,
             (bool) ($params['serversecure'] ?? true)
         );
 
@@ -926,6 +926,6 @@ class PanelDnsResellerService
             $context['soa_email'] = $soaEmail;
         }
 
-        PanelDnsWelcomeMail::sendReseller($serviceId, $sso['data'], $context);
+        PanelDnsResellerWelcomeMail::sendReseller($serviceId, $sso['data'], $context);
     }
 }

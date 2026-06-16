@@ -272,7 +272,7 @@ class PanelDnsResellerHooks
      * where the deadline date is today or in the past, then hard-deletes the
      * sub-client and clears the marker.
      *
-     * Terminated WHMCS services are excluded from DriftSync, so the suspended
+     * Terminated WHMCS services are excluded from PanelDnsResellerDriftSync, so the suspended
      * sub-client is never accidentally re-activated before deletion.
      */
     public static function processExpiredGracePeriods(): void
@@ -388,17 +388,17 @@ class PanelDnsResellerHooks
     }
 
     /**
-     * Build a reseller-mode PanelDnsApi from a joined server row.
+     * Build a reseller-mode PanelDnsResellerApi from a joined server row.
      * Expects ->server_hostname, ->server_key (encrypted accesshash),
      * ->server_secure, ->server_port.
      */
-    private static function apiForServer(object $service): PanelDnsApi
+    private static function apiForServer(object $service): PanelDnsResellerApi
     {
         $secure = (bool) $service->server_secure;
         $port   = (int) $service->server_port;
 
         // SEC-H7: SSRF pre-flight — validate server hostname before building the API client.
-        // This path bypasses __construct() and constructs PanelDnsApi directly.
+        // This path bypasses __construct() and constructs PanelDnsResellerApi directly.
         $hookResolved = gethostbyname($service->server_hostname);
         if (filter_var($hookResolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
             throw new \RuntimeException('paneldns-reseller: server hostname resolves to a private/reserved IP address.');
@@ -408,10 +408,10 @@ class PanelDnsResellerHooks
             . '://' . $service->server_hostname
             . ($port && !in_array($port, [80, 443], true) ? ':' . $port : '');
 
-        return new PanelDnsApi(
+        return new PanelDnsResellerApi(
             $baseUrl,
             function_exists('decrypt') ? decrypt($service->server_key) : (string) $service->server_key,
-            PanelDnsApi::MODE_RESELLER,
+            PanelDnsResellerApi::MODE_RESELLER,
             $secure
         );
     }

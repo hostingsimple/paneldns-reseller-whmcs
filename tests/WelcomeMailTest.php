@@ -3,7 +3,7 @@
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \PanelDnsWelcomeMail
+ * @covers \PanelDnsResellerWelcomeMail
  */
 final class WelcomeMailTest extends TestCase
 {
@@ -12,7 +12,7 @@ final class WelcomeMailTest extends TestCase
      */
     public function test_human_expiry_formats(int $seconds, string $expected): void
     {
-        $this->assertSame($expected, PanelDnsWelcomeMail::humanExpiry($seconds));
+        $this->assertSame($expected, PanelDnsResellerWelcomeMail::humanExpiry($seconds));
     }
 
     public static function humanExpiryProvider(): array
@@ -30,10 +30,10 @@ final class WelcomeMailTest extends TestCase
     public function test_template_constants_are_distinct(): void
     {
         $this->assertNotSame(
-            PanelDnsWelcomeMail::TEMPLATE_PLATFORM,
-            PanelDnsWelcomeMail::TEMPLATE_RESELLER
+            PanelDnsResellerWelcomeMail::TEMPLATE_PLATFORM,
+            PanelDnsResellerWelcomeMail::TEMPLATE_RESELLER
         );
-        $this->assertStringContainsString('Platform', PanelDnsWelcomeMail::TEMPLATE_PLATFORM);
-        $this->assertStringContainsString('Reseller', PanelDnsWelcomeMail::TEMPLATE_RESELLER);
+        $this->assertStringContainsString('Platform', PanelDnsResellerWelcomeMail::TEMPLATE_PLATFORM);
+        $this->assertStringContainsString('Reseller', PanelDnsResellerWelcomeMail::TEMPLATE_RESELLER);
     }
 }

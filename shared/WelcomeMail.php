@@ -1,7 +1,7 @@
 <?php
 
 /**
- * WelcomeMail — dispatch a "your PanelDNS account is ready" email with a
+ * PanelDnsResellerWelcomeMail — dispatch a "your PanelDNS account is ready" email with a
  * 60-second SSO link.
  *
  * Uses WHMCS's sendMessage() helper with custom merge fields. The customer
@@ -24,7 +24,8 @@ if (!defined('WHMCS')) {
     die('Access denied.');
 }
 
-class PanelDnsWelcomeMail
+if (!class_exists('PanelDnsResellerWelcomeMail', false)) {
+class PanelDnsResellerWelcomeMail
 {
     const TEMPLATE_PLATFORM = 'PanelDNS Platform Welcome';
     const TEMPLATE_RESELLER = 'PanelDNS Reseller Welcome';
@@ -99,7 +100,8 @@ class PanelDnsWelcomeMail
     private static function log(string $msg, array $ctx): void
     {
         if (function_exists('logModuleCall')) {
-            logModuleCall('paneldns', 'WelcomeMail', $msg, $ctx);
+            logModuleCall('paneldns', 'PanelDnsResellerWelcomeMail', $msg, $ctx);
         }
     }
+}
 }
