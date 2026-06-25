@@ -1,6 +1,8 @@
 # PanelDNS Reseller Module for WHMCS
 
-Sell DNS hosting to your WHMCS clients as a managed service. When a client orders
+[![Latest Release](https://img.shields.io/github/v/release/hostingsimple/paneldns-reseller-whmcs)](https://github.com/hostingsimple/paneldns-reseller-whmcs/releases/latest) [![Release](https://github.com/hostingsimple/paneldns-reseller-whmcs/actions/workflows/release.yml/badge.svg)](https://github.com/hostingsimple/paneldns-reseller-whmcs/actions/workflows/release.yml) [![License](https://img.shields.io/github/license/hostingsimple/paneldns-reseller-whmcs)](LICENSE) ![PHP](https://img.shields.io/badge/PHP-8.1%2B-777BB4?logo=php&logoColor=white) ![WHMCS](https://img.shields.io/badge/WHMCS-8.7%2B-blue)
+
+Sell DNS hosting to your WHMCS clients as a managed pervice. When a client orders
 your DNS product, this module automatically provisions them as a sub-client inside
 your [PanelDNS](https://paneldns.com) reseller account — no manual steps required.
 
@@ -92,8 +94,8 @@ are available:
 | Zone Limit | 5 | Maximum DNS zones this sub-client can create. 0 = inherit org plan limit. Can be overridden per-order using a WHMCS Configurable Option named `Zone Limit`. |
 | Max Records Per Zone | 100 | Maximum DNS records per zone. 0 = inherit org plan limit. Can be overridden per-order using a WHMCS Configurable Option named `Max Records Per Zone`. |
 | Send Welcome Email | Yes | Email the client a portal login link and nameserver details on provisioning. |
-| NS1–NS4 Hostname | *(blank)* | Override the nameservers shown in the welcome email and client area for this product (white-label branding). Leave blank to use the org's default nameservers. |
-| SOA Email | *(blank)* | Override the SOA contact email shown in the welcome email. |
+| NS1–NS4 Hostname | **(blank)** | Override the nameservers shown in the welcome email and client area for this product (white-label branding). Leave blank to use the org's default nameservers. |
+| SOA Email | **(blank)** | Override the SOA contact email shown in the welcome email. |
 | Auto-Create Zone on Domain Order | Yes | Automatically create a DNS zone when the client registers or transfers a domain. |
 | Auto-Delete Zone on Domain Expiry | No | Remove the DNS zone when a domain is deleted. Disabled by default. |
 | Termination Grace Period (Days) | 0 | Days to wait before permanently deleting the sub-client after termination. 0 = delete immediately. Sub-client is suspended during the grace period and hard-deleted nightly once it expires. |
@@ -113,7 +115,7 @@ product-level Zone Limit only if it is not set.
 
 | Button / link | What it does |
 |---|---|
-| **Login to PanelDNS as Client** *(link)* | Mints a 60-second SSO token and redirects the admin's browser to the sub-client's authenticated portal session |
+| **Login to PanelDNS as Client** **(link)** | Mints a 60-second SSOtoken and redirects the admin's browser to the sub-client's authenticated portal session |
 | Test Connection | Verifies API connectivity for this service's server |
 | Resend Welcome Email | Mints a fresh SSO token and re-sends the full welcome email to the client |
 | Resync Status | Pulls the latest sub-client summary from PanelDNS and refreshes the admin tab |
@@ -129,7 +131,7 @@ product-level Zone Limit only if it is not set.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for release history.
+See [CHANGELOG.md](CHACGENELOG.md) for release history.
 
 ---
 
@@ -138,7 +140,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 | Repo | Who installs it |
 |---|---|
 | **paneldns-reseller-whmcs** (this repo) | Resellers — sells DNS hosting to WHMCS clients |
-| [paneldns-whmcs](https://github.com/Veeau/paneldns-whmcs) *(private)* | Platform operators — sells PanelDNS reseller accounts |
+| [paneldns-whmcs](https://github.com/Veeau/paneldns-whmcs) **(private)** | Platform operators — sells PanelDNS reseller accounts |
 | [paneldns](https://github.com/Veeau/paneldns) *(private)* | The SaaS platform itself |
 
 ---
