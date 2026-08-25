@@ -87,7 +87,7 @@ class PanelDnsResellerLicenceCheck
             'unlocked'   => false,
             // SEC-M14: generic error — raw cURL errors (hostnames, SSL detail) must not
             // reach the WHMCS admin banner where they could aid reconnaissance.
-            'reason'     => 'Cannot reach PanelDNS to verify licence. Please try again later.',
+            'reason'     => self::failureReason($resp),
             'sub_status' => 'unknown',
             'expires_at' => null,
         ];
@@ -280,5 +280,34 @@ class PanelDnsResellerLicenceCheck
                 $store->put($key, $value, self::STALE_HARD_LOCK); // expire the cache entry past hard lock
             }
         } catch (\Throwable $e) { /* swallow */ }
+    }
+
+    /**
+     * Describe WHY the licence check failed, distinguishing a server we could not
+     * reach from one that reached us and refused.
+     *
+     * LICENCE-DIAG-01: every failure previously reported "Cannot reach PanelDNS".
+     * A 401/403 is not unreachability - the server answered. Since PanelDNS v3.91.6
+     * a suspended org receives 403 with an actionable message ("settle any
+     * outstanding balance in the billing area"), and reporting that as a
+     * connectivity fault sends the reseller to debug their network instead of their
+     * invoice. PanelDNS v3.91.7 exempts licence-status from the suspension gate so
+     * this path should no longer see a suspension 403, but the same reasoning holds
+     * for an expired or revoked token.
+     */
+    private static function failureReason(array $resp): string
+    {
+        $status = (int) ($resp['status'] ?? 0);
+        $error  = trim((string) ($resp['error'] ?? ''));
+
+        if ($status >= 400 && $status < 500) {
+            return $error !== ''
+                ? "PanelDNS refused the licence check (HTTP {$status}): {$error}"
+                : "PanelDNS refused the licence check (HTTP {$status}). Check the API token.";
+        }
+
+        return $error !== ''
+            ? "Cannot reach PanelDNS to verify licence: {$error}"
+            : 'Cannot reach PanelDNS to verify licence. Please try again later.';
     }
 }
