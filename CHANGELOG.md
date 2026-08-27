@@ -4,6 +4,27 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.9.2] — 2026-08-27
+
+### Fixed
+
+- **Past-due grace clock started one cycle late (GRACE-CLOCK-02).** This module already
+  measured grace from `first_past_due_at` rather than from cache age, so it was never
+  affected by the indefinite-grace bug the other billing modules had. But the `&& $cached`
+  guard discarded the timestamp on the *first* past-due observation — when no cache exists
+  yet — writing `null`. The next refresh a day later then set it to that later `now`, so the
+  window ran **8 days instead of 7**. Simulated day 0→10 with a virtual clock: locked on day
+  8 before, day 7 after.
+- **`curl_close()` removed** (PHP8-CURL-01). No effect since PHP 8.0, deprecated in PHP 8.5,
+  where it emitted a deprecation notice on every API call.
+
+### Note on tags
+
+Releases `1.8.0`, `1.9.0` and `1.9.1` were documented here but never tagged; the newest tag
+was `v1.7.1`. Tagging resumes at `v1.9.2` — the three intervening versions remain untagged.
+
+---
+
 ## [1.9.1] — 2026-06-16
 
 ### Fixed
