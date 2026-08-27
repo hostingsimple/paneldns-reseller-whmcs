@@ -60,7 +60,11 @@ class PanelDnsResellerLicenceCheck
             $subStatus = $payload['sub_status'] ?? 'unknown';
             // FIX-H1: preserve first_past_due_at from the existing cache so grace
             // is measured from when past_due was first observed, not from cache age.
-            $firstPastDueAt = ($subStatus === 'past_due' && $cached)
+            // GRACE-CLOCK-02: the `&& $cached` guard discarded the timestamp on the
+            // FIRST past-due observation (when no cache exists yet), writing null. The
+            // next refresh a day later then set it to that later now, so the clock
+            // started one cache cycle late and grace ran 8 days instead of 7.
+            $firstPastDueAt = $subStatus === 'past_due'
                 ? ($cached['first_past_due_at'] ?? $now)
                 : null;
             $newCache = [
