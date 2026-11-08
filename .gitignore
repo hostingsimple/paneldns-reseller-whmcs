@@ -7,7 +7,7 @@ dist/
 
 # build.php copies shared/*.php into lib/ at build time.
 # These copies are NOT committed — the repo holds only the originals in shared/.
-modules/servers/paneldns-reseller/lib/PanelDnsApi.php
-modules/servers/paneldns-reseller/lib/LicenceCheck.php
-modules/servers/paneldns-reseller/lib/DriftSync.php
-modules/servers/paneldns-reseller/lib/WelcomeMail.php
+modules/servers/paneldnsreseller/lib/PanelDnsApi.php
+modules/servers/paneldnsreseller/lib/LicenceCheck.php
+modules/servers/paneldnsreseller/lib/DriftSync.php
+modules/servers/paneldnsreseller/lib/WelcomeMail.php

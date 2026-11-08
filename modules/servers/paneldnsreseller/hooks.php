@@ -1,18 +1,17 @@
 <?php
 
 /**
- * paneldns-reseller module hooks.
+ * paneldnsreseller module hooks.
  *
- * DailyCronJob fires drift reconciliation. Both modules' hooks are
- * idempotent — PanelDnsResellerDriftSync filters by servertype internally, so it only
- * touches its own services regardless of which hook fires first.
+ * DailyCronJob fires drift reconciliation for this module's services only
+ * (paneldnsreseller); the operator module (paneldnsplatform) reconciles its own.
  *
- * If both modules are installed, both hooks fire (in order priority 1)
- * but the second invocation is a no-op because the first already
- * processed up to MAX_PER_RUN services that round.
+ * Every file this loads lives under this module's own lib/ — the release ZIP must be
+ * self-contained (BUILD-ZIP-01: up to v1.9.2 this required ../../../shared/, which is
+ * not in the ZIP, and the module fataled on load).
  *
- * Actually, the second invocation will pick up DIFFERENT services since
- * MAX_PER_RUN limits each call separately — so this is fine.
+ * WHMCS loads a provisioning module's hooks.php only once the module is "activated",
+ * i.e. after a product using it has been saved. See INSTALL.md → Upgrading.
  */
 
 if (!defined('WHMCS')) {
@@ -20,11 +19,23 @@ if (!defined('WHMCS')) {
 }
 
 require_once __DIR__ . '/lib/PanelDnsApi.php';
-// FIX-C1: PanelDnsResellerDriftSync lives in shared/ — the lib/ path does not exist.
-require_once __DIR__ . '/../../../shared/DriftSync.php';
+require_once __DIR__ . '/lib/DriftSync.php';
+require_once __DIR__ . '/lib/PanelDnsResellerMigration.php';
 require_once __DIR__ . '/lib/PanelDnsResellerHooks.php';
 
+/**
+ * MODULE-NAME-01: migrate products/servers still stored under the pre-1.9.3 module names
+ * (paneldns-reseller, paneldns_reseller). pending() is two existence checks on small
+ * tables, and runIfPending() runs at most once per request.
+ */
+add_hook('AdminAreaPage', 1, function (array $vars) {
+    PanelDnsResellerMigration::runIfPending();
+    return [];
+});
+
 add_hook('DailyCronJob', 1, function () {
+    // Migrate first, so the drift sync and grace cron below see the new module name.
+    PanelDnsResellerMigration::runIfPending();
     try {
         PanelDnsResellerDriftSync::run();
     } catch (\Throwable $e) {
@@ -90,9 +101,13 @@ add_hook('AddonTerminated', 1, function (array $vars) {
 });
 
 /**
- * CLIENT-SYNC-01: push WHMCS client profile changes to PanelDNS.
+ * CLIENT-SYNC-01: push WHMCS client name changes to PanelDNS.
  * Fires whenever any client field is updated (admin area or client portal).
  * Fetches current values from tblclients rather than trusting hook vars alone.
+ *
+ * CLIENT-SYNC-02 (v1.9.3): only the name is sent. PATCH /api/v1/sub-clients/{id}
+ * accepts name, status, zone_limit and max_records; it ignores email (kept fixed as
+ * the sub-client's SSO identity) and locale.
  */
 add_hook('ClientEdit', 1, function (array $vars) {
     $userId = (int) ($vars['userid'] ?? 0);
@@ -100,15 +115,13 @@ add_hook('ClientEdit', 1, function (array $vars) {
     try {
         $client = \WHMCS\Database\Capsule::table('tblclients')
             ->where('id', $userId)
-            ->select(['firstname', 'lastname', 'email', 'language'])
+            ->select(['firstname', 'lastname'])
             ->first();
         if (!$client) return;
         PanelDnsResellerHooks::onClientEdit(
             $userId,
             (string) $client->firstname,
-            (string) $client->lastname,
-            (string) $client->email,
-            (string) ($client->language ?? '')
+            (string) $client->lastname
         );
     } catch (\Throwable $e) {
         if (function_exists('logActivity')) {
@@ -140,7 +153,7 @@ add_hook('DailyCronJob', 1, function () {
  * immediately on payment and unsuspends right away.
  *
  * WHMCS InvoicePaymentSuccess passes 'invoiceid' and 'userid' at the top level.
- * The hook checks every Suspended paneldns-reseller service for that client,
+ * The hook checks every Suspended paneldnsreseller service for that client,
  * so it handles the edge case of a client with multiple DNS products.
  */
 add_hook('InvoicePaymentSuccess', 1, function (array $vars) {
