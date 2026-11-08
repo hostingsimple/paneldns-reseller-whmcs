@@ -183,6 +183,63 @@ final class LicenceCheckTest extends TestCase
         $this->assertStringContainsString('server hostname and access hash', $banner);
     }
 
+    // ── SEC-M14: failure reasons never carry transport detail ────────────────
+
+    public function test_failureReason_drops_the_raw_curl_error(): void
+    {
+        $reason = PanelDnsResellerLicenceCheck::failureReason([
+            'status' => 0,
+            'error'  => 'Failed to connect to db01.internal port 443 after 3 ms: Connection refused (10.0.0.9)',
+        ]);
+        $this->assertStringNotContainsString('db01.internal', $reason);
+        $this->assertStringNotContainsString('10.0.0.9', $reason);
+        $this->assertStringContainsString('Cannot reach PanelDNS', $reason);
+    }
+
+    public function test_failureReason_keeps_panel_dns_refusal_text(): void
+    {
+        $reason = PanelDnsResellerLicenceCheck::failureReason([
+            'status' => 403,
+            'error'  => 'This organisation is suspended. Settle any outstanding balance in the billing area.',
+        ]);
+        $this->assertStringContainsString('refused the licence check (HTTP 403)', $reason);
+        $this->assertStringContainsString('organisation is suspended', $reason);
+    }
+
+    public function test_failureReason_5xx_is_generic(): void
+    {
+        $reason = PanelDnsResellerLicenceCheck::failureReason(['status' => 502, 'error' => 'upstream nginx 10.1.1.1']);
+        $this->assertStringNotContainsString('10.1.1.1', $reason);
+        $this->assertStringContainsString('HTTP 502', $reason);
+    }
+
+    public function test_formatErrorBanner_unknown_shows_the_escaped_reason(): void
+    {
+        $banner = PanelDnsResellerLicenceCheck::formatErrorBanner([
+            'unlocked'   => false,
+            'sub_status' => 'unknown',
+            'expires_at' => null,
+            'reason'     => 'PanelDNS refused the licence check (HTTP 401): <b>Unauthenticated.</b>',
+        ]);
+        $this->assertStringContainsString('refused the licence check (HTTP 401)', $banner);
+        $this->assertStringContainsString('&lt;b&gt;', $banner);
+        $this->assertStringNotContainsString('<b>', $banner);
+    }
+
+    public function test_check_end_to_end_reports_unreachable_without_the_curl_text(): void
+    {
+        \WHMCS\Cache\Store::clear();
+        $api = (new FakeApi())->on('GET', '/api/v1/licence-status', [
+            'status' => 0, 'body' => null, 'headers' => [], 'primary_ip' => '',
+            'curl_error' => 'Could not resolve host: paneldns.corp.example', 'curl_errno' => 6,
+        ]);
+
+        $banner = PanelDnsResellerLicenceCheck::gateOrError($api, PanelDnsResellerLicenceCheck::REQUIRED_MODULE_RESELLER);
+        $this->assertNotNull($banner);
+        $this->assertStringContainsString('Could not verify', $banner);
+        $this->assertStringNotContainsString('corp.example', $banner);
+    }
+
     public function test_formatErrorBanner_falls_back_when_no_reactivation_url(): void
     {
         $banner = PanelDnsResellerLicenceCheck::formatErrorBanner([

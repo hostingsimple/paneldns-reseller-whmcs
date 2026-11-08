@@ -1,8 +1,8 @@
 # PanelDNS Reseller Module for WHMCS
 
-[![Latest Release](https://img.shields.io/github/v/release/hostingsimple/paneldns-reseller-whmcs)](https://github.com/hostingsimple/paneldns-reseller-whmcs/releases/latest) [![Release](https://github.com/hostingsimple/paneldns-reseller-whmcs/actions/workflows/release.yml/badge.svg)](https://github.com/hostingsimple/paneldns-reseller-whmcs/actions/workflows/release.yml) [![License](https://img.shields.io/github/license/hostingsimple/paneldns-reseller-whmcs)](LICENSE) ![PHP](https://img.shields.io/badge/PHP-8.1%2B-777BB4?logo=php&logoColor=white) ![WHMCS](https://img.shields.io/badge/WHMCS-8.7%2B-blue)
+[![Latest Release](https://img.shields.io/github/v/release/hostingsimple/paneldns-reseller-whmcs)](https://github.com/hostingsimple/paneldns-reseller-whmcs/releases/latest) [![Release](https://github.com/hostingsimple/paneldns-reseller-whmcs/actions/workflows/release.yml/badge.svg)](https://github.com/hostingsimple/paneldns-reseller-whmcs/actions/workflows/release.yml) [![License](https://img.shields.io/github/license/hostingsimple/paneldns-reseller-whmcs)](LICENSE) ![PHP](https://img.shields.io/badge/PHP-8.2%2B-777BB4?logo=php&logoColor=white) ![WHMCS](https://img.shields.io/badge/WHMCS-8.7%2B-blue)
 
-Sell DNS hosting to your WHMCS clients as a managed pervice. When a client orders
+Sell DNS hosting to your WHMCS clients as a managed service. When a client orders
 your DNS product, this module automatically provisions them as a sub-client inside
 your [PanelDNS](https://paneldns.com) reseller account — no manual steps required.
 
@@ -17,7 +17,7 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 | Admin unsuspends | Sub-client re-activated |
 | Admin terminates | Sub-client deleted (or suspended for a configurable grace period) |
 | Admin changes package | Zone and record limits updated |
-| Client updates profile | Name and email synced to PanelDNS automatically |
+| Client updates profile | Name synced to PanelDNS automatically (the email stays fixed — it is the sub-client's sign-in identity) |
 
 ### Additional features
 
@@ -26,8 +26,9 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 - **DNSSEC signing** — clients can enable/disable DNSSEC on each zone from the record
   manager; DS records are displayed for submission at the domain registrar (requires
   PanelDNS 3.24+, silently hidden for older installs or providers without DNSSEC support)
-- **BIND zone export** — clients can download any zone as a BIND-format `.zone` file
-  directly from the record manager
+- **BIND zone export and import** — clients can download any zone as a BIND-format
+  `.zone` file from the record manager, and import a zone file of up to 50 KB
+  (PanelDNS's limit per import)
 - **Nameserver card** — the client area always shows the nameservers clients need to
   set at their registrar, so they never need to dig through old welcome emails
 - **Auto-create DNS zones** — when a domain is registered or transferred through
@@ -42,18 +43,24 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
   clients in one run; idempotent (safe to re-run at any time)
 - **Daily drift sync** — a background job keeps WHMCS and PanelDNS statuses in sync
   and catches any divergence between the two systems
-- **Client profile sync** — name and email changes in WHMCS are automatically pushed
-  to PanelDNS so both systems stay consistent
+- **Client profile sync** — name changes in WHMCS are pushed to PanelDNS automatically
+  (PanelDNS does not accept email or language changes through its API)
 - **Consent at provisioning (GDPR)** — when a sub-client is provisioned, the module
   fetches the current platform legal version via `GET /api/v1/legal-version` and stamps
   `terms_acknowledged` + `terms_version` on the new sub-client record, creating a
   `ConsentRecord` in PanelDNS immediately. Requires PanelDNS 3.48.0+. Soft-fails
   gracefully if the endpoint is unreachable.
-- **Re-consent banner** — the WHMCS client area shows an amber action-required notice
-  when the sub-client's accepted terms version is behind the current platform version,
-  with a direct SSO link to the portal's acceptance form
-- **WHMCS Sync / ListAccounts** — the WHMCS server Sync tool works out of the box;
-  use it to surface orphaned or unprovisioned services
+- **WHMCS Sync / ListAccounts** — the WHMCS server Sync tool works out of the box and
+  sees every sub-client (paged 50 at a time, up to 5,000); use it to surface orphaned
+  or unprovisioned services
+- **One account per client email** — PanelDNS allows one sub-client per email in an
+  organisation. A second DNS order by the same client gets a clear "upgrade the
+  existing service" message instead of a bare HTTP 422; a re-order after termination
+  is linked back to the client's existing sub-client. An existing sub-client is never
+  linked on email alone (see INSTALL.md → Troubleshooting)
+- **Readable errors and rate-limit handling** — PanelDNS validation messages, "API
+  switched off" and IP-allowlist refusals are shown as PanelDNS words them; a 429 is
+  reported with its retry time and no further calls are made until it passes
 - **Termination grace period** — optionally suspend a sub-client for N days before
   hard-deleting, giving you time to recover accidental cancellations
 
@@ -65,7 +72,7 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 |---|---|
 | WHMCS | 8.7 or later |
 | PHP | 8.2 or later |
-| PanelDNS | 3.5.0 or later |
+| PanelDNS | 3.5.0 or later (consent stamping needs 3.48.0+; checked against the 3.103 API) |
 | PHP extensions | `curl`, `json` (standard on all modern hosts) |
 
 You must have an active PanelDNS account with at least one reseller org.
@@ -74,11 +81,19 @@ You must have an active PanelDNS account with at least one reseller org.
 
 ## Quick start
 
-1. **Download** the latest `paneldns-reseller-whmcs-vX.X.X.zip` from
-   [Releases](https://github.com/Veeau/paneldns-reseller-whmcs/releases)
-2. **Extract** the ZIP into your WHMCS root — the `modules/` folder merges cleanly
-3. **Generate an API token** in your PanelDNS dashboard → API Tokens
-4. **Add a server** in WHMCS Admin → Setup → Servers, paste the token as the Access Hash
+1. **Download** the latest `paneldns-reseller-whmcs-X.X.X.zip` from
+   [Releases](https://github.com/hostingsimple/paneldns-reseller-whmcs/releases)
+2. **Extract** the ZIP into your WHMCS root — it adds `modules/servers/paneldnsreseller/`
+3. **Generate an API token** in your PanelDNS dashboard → Settings → API Tokens, with the
+   scopes `sub_clients:read`, `sub_clients:write`, `zones:read`, `zones:write`,
+   `records:read`, `records:write` (tokens made before PanelDNS 3.98.0 should be re-made)
+4. **Add a server** in WHMCS Admin → Setup → Servers, module *PanelDNS (Reseller — Sub-client
+   DNS Hosting)*, and paste the token as the Access Hash
+
+> **Upgrading from 1.9.2 or earlier:** the module folder is now `paneldnsreseller` (it was
+> `paneldns-reseller`, a name WHMCS cannot call). Delete the old folder and follow
+> [INSTALL.md → Upgrading](INSTALL.md#from-192-or-earlier--the-module-was-renamed) — one SQL
+> statement per table, or let the module migrate itself, then save the product once.
 
 Full step-by-step instructions: **[INSTALL.md](INSTALL.md)**
 
@@ -115,7 +130,7 @@ product-level Zone Limit only if it is not set.
 
 | Button / link | What it does |
 |---|---|
-| **Login to PanelDNS as Client** **(link)** | Mints a 60-second SSOtoken and redirects the admin's browser to the sub-client's authenticated portal session |
+| **Login to PanelDNS as Client** **(link)** | Mints a 60-second SSO token and redirects the admin's browser to the sub-client's authenticated portal session |
 | Test Connection | Verifies API connectivity for this service's server |
 | Resend Welcome Email | Mints a fresh SSO token and re-sends the full welcome email to the client |
 | Resync Status | Pulls the latest sub-client summary from PanelDNS and refreshes the admin tab |
@@ -129,9 +144,50 @@ product-level Zone Limit only if it is not set.
 
 ---
 
+## Directory structure
+
+```
+modules/servers/paneldnsreseller/      ← what the release ZIP installs
+├── paneldnsreseller.php               WHMCS module functions (paneldnsreseller_*)
+├── hooks.php                          cron, domain, addon, client-edit, payment hooks
+├── templates/client/*.tpl             client-area pages (?customAction=zones, records, …)
+└── lib/
+    ├── PanelDnsResellerService.php    lifecycle, SSO, admin tab, client area
+    ├── PanelDnsResellerHooks.php      hook logic (domain/addon/grace/payment)
+    ├── PanelDnsResellerMigration.php  pre-1.9.3 module-name migration
+    ├── EmbeddedDnsManager.php         in-WHMCS zone + record manager
+    └── PanelDnsApi.php, LicenceCheck.php, DriftSync.php, WelcomeMail.php
+                                       ← copied from shared/ by build.php (not committed)
+shared/                                source of the four copied files
+tests/                                 PHPUnit suite (incl. a build-and-load test of the ZIP)
+build.php                              builds dist/paneldns-reseller-whmcs-X.Y.Z.zip
+```
+
+---
+
+## Security
+
+- The API token is stored in WHMCS's encrypted server Access Hash. Module-log entries are
+  scrubbed at any depth: passwords, tokens, secrets and keys are replaced by `[REDACTED]`,
+  one-time SSO links lose their `token=`, the secret values are also passed to WHMCS's
+  log masking, `?search=` / `?email=` values are redacted from logged URLs, and zone files
+  are logged by size only.
+- Every client-area zone or record action first checks that the zone belongs to the
+  service's own sub-client; record writes are additionally scoped to that zone by PanelDNS.
+- Client-area forms carry a per-service CSRF token, rotated after each change; mutations
+  are POST-only and the embedded manager is rate-limited to 60 requests per minute.
+- Server hostnames that resolve to private or reserved addresses are refused (SSRF), and
+  cURL is IPv4-only with TLS verification on.
+- Network-level error text (hostnames, IPs, TLS detail) stays in the module log; WHMCS
+  screens and the client area show a generic line.
+- An existing PanelDNS sub-client is never linked to a new order on email alone, and only
+  ever within the token's own organisation.
+
+---
+
 ## Changelog
 
-See [CHANGELOG.md](CHACGENELOG.md) for release history.
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ---
 
@@ -140,7 +196,7 @@ See [CHANGELOG.md](CHACGENELOG.md) for release history.
 | Repo | Who installs it |
 |---|---|
 | **paneldns-reseller-whmcs** (this repo) | Resellers — sells DNS hosting to WHMCS clients |
-| [paneldns-whmcs](https://github.com/Veeau/paneldns-whmcs) **(private)** | Platform operators — sells PanelDNS reseller accounts |
+| [paneldns-whmcs](https://github.com/Veeau/paneldns-whmcs) **(private)** | Platform operators — sells PanelDNS reseller accounts (module `paneldnsplatform`) |
 | [paneldns](https://github.com/Veeau/paneldns) *(private)* | The SaaS platform itself |
 
 ---

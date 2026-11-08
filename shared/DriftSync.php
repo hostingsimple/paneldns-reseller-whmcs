@@ -15,6 +15,10 @@
  *   3. WHMCS shows Active but PanelDNS lookup returns 404 (org deleted
  *      out-of-band). Fix: stamp WHMCS service Terminated.
  *
+ * DRIFT-SCOPE-01 (v1.9.3): this module's (paneldnsreseller) services only, matching
+ * the operator module (paneldnsplatform), whose own drift sync now reconciles only its
+ * services. Up to 1.9.2 both copies reconciled both modules' services.
+ *
  * Called from hooks.php on the DailyCronJob hook. Throttled to 100
  * services per run; the next cron picks up where we left off via
  * last_synced_at ordering. A full WHMCS install with thousands of
@@ -30,19 +34,27 @@ class PanelDnsResellerDriftSync
 {
     const MAX_PER_RUN = 100;
 
+    /** WHMCS module (folder) name, as stored in tblproducts.servertype. */
+    const MODULE_RESELLER = 'paneldnsreseller';
+
+    /** The name plus the pre-1.9.3 spellings, so drift runs even before the migration. */
+    const SERVERTYPES = ['paneldnsreseller', 'paneldns-reseller', 'paneldns_reseller'];
+
     /**
-     * Reconcile both modules' services in one pass.
+     * Reconcile this module's services.
      */
     public static function run(): array
     {
         $stats = ['checked' => 0, 'drift_fixed' => 0, 'errors' => 0];
 
         try {
-            // Only services where the module column matches one of ours AND
-            // status != Terminated.
+            // Only this module's services AND status != Terminated.
             $rows = \WHMCS\Database\Capsule::table('tblhosting')
                 ->join('tblproducts', 'tblhosting.packageid', '=', 'tblproducts.id')
-                ->whereIn('tblproducts.servertype', ['paneldns-platform', 'paneldns-reseller'])
+                // MODULE-NAME-01 (v1.9.3): WHMCS stores the module FOLDER name here; the
+                // module is now `paneldnsreseller` (the old `paneldns-reseller` is not a
+                // valid WHMCS module name). Legacy spellings are matched until migrated.
+                ->whereIn('tblproducts.servertype', self::SERVERTYPES)
                 ->whereNotIn('tblhosting.domainstatus', ['Terminated', 'Cancelled', 'Fraud'])
                 ->select(
                     'tblhosting.id as service_id',
@@ -96,15 +108,13 @@ class PanelDnsResellerDriftSync
                 . ($serverParams['serverport'] && !in_array((int) $serverParams['serverport'], [80, 443], true)
                     ? ':' . (int) $serverParams['serverport'] : ''),
             $serverParams['serveraccesshash'] ?? '',
-            $row->servertype === 'paneldns-platform' ? PanelDnsResellerApi::MODE_PLATFORM : PanelDnsResellerApi::MODE_RESELLER,
+            PanelDnsResellerApi::MODE_RESELLER,
             (bool) $serverParams['serversecure']
         );
 
-        $upstream = $row->servertype === 'paneldns-platform'
-            ? $api->getOrg((int) $row->paneldns_id)
-            : $api->getSubClient((int) $row->paneldns_id);
+        $upstream = $api->getSubClient((int) $row->paneldns_id);
 
-        // Org/sub-client deleted upstream → terminate WHMCS service.
+        // Sub-client deleted upstream → terminate WHMCS service.
         if (!$upstream['ok'] && $upstream['status'] === 404) {
             self::updateWhmcsStatus((int) $row->service_id, 'Terminated', 'drift: upstream deleted');
             return true;

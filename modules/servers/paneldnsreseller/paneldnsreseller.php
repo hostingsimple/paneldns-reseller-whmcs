@@ -1,7 +1,14 @@
 <?php
 
 /**
- * paneldns-reseller — WHMCS server module for selling sub-client DNS hosting.
+ * paneldnsreseller — WHMCS server module for selling sub-client DNS hosting.
+ *
+ * MODULE-NAME-01 (v1.9.3): the folder, this file and every function prefix are
+ * `paneldnsreseller` — WHMCS module names must be a single word of lowercase letters
+ * and numbers, and WHMCS calls "{folder}_{Function}". Up to 1.9.2 the folder was
+ * `paneldns-reseller` while the functions were `paneldns_reseller_*`, so WHMCS could
+ * call none of them. lib/PanelDnsResellerMigration.php moves existing products and
+ * servers to the new name.
  *
  * Drives the reseller-tier Public API (/api/v1). Used by a reseller who has
  * a PanelDNS org and wants to sell DNS to their own customers via WHMCS:
@@ -13,8 +20,9 @@
  *   - "Login to PanelDNS Portal" → POST /api/v1/sub-clients/{id}/sso-token → 302
  *
  * Authentication: a per-user Sanctum Bearer token issued by the reseller's
- * own PanelDNS dashboard (Dashboard → API Tokens). Scopes required:
- * sub_clients:write, sub_clients:read.
+ * own PanelDNS dashboard (Settings → API Tokens). Scopes: sub_clients:read,
+ * sub_clients:write, zones:read, zones:write, records:read, records:write — see
+ * INSTALL.md for which feature needs which.
  *
  * See INSTALL.md in the repo root for setup.
  *
@@ -31,13 +39,13 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '1.9.2');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.9.3');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';
 require_once __DIR__ . '/lib/PanelDnsApi.php';
 
-function paneldns_reseller_MetaData(): array
+function paneldnsreseller_MetaData(): array
 {
     return [
         'DisplayName'                              => 'PanelDNS (Reseller — Sub-client DNS Hosting)',
@@ -61,7 +69,7 @@ function paneldns_reseller_MetaData(): array
     ];
 }
 
-function paneldns_reseller_ConfigOptions(): array
+function paneldnsreseller_ConfigOptions(): array
 {
     return [
         'Zone Limit' => [
@@ -136,32 +144,32 @@ function paneldns_reseller_ConfigOptions(): array
     ];
 }
 
-function paneldns_reseller_CreateAccount(array $params): string
+function paneldnsreseller_CreateAccount(array $params): string
 {
     return PanelDnsResellerService::run('createAccount', $params);
 }
 
-function paneldns_reseller_SuspendAccount(array $params): string
+function paneldnsreseller_SuspendAccount(array $params): string
 {
     return PanelDnsResellerService::run('suspendAccount', $params);
 }
 
-function paneldns_reseller_UnsuspendAccount(array $params): string
+function paneldnsreseller_UnsuspendAccount(array $params): string
 {
     return PanelDnsResellerService::run('unsuspendAccount', $params);
 }
 
-function paneldns_reseller_TerminateAccount(array $params): string
+function paneldnsreseller_TerminateAccount(array $params): string
 {
     return PanelDnsResellerService::run('terminateAccount', $params);
 }
 
-function paneldns_reseller_ChangePackage(array $params): string
+function paneldnsreseller_ChangePackage(array $params): string
 {
     return PanelDnsResellerService::run('changePackage', $params);
 }
 
-function paneldns_reseller_AdminCustomButtonArray(): array
+function paneldnsreseller_AdminCustomButtonArray(): array
 {
     return [
         'Test Connection'      => 'testConnection',
@@ -177,7 +185,7 @@ function paneldns_reseller_AdminCustomButtonArray(): array
  * (Admin → Setup → Servers → Edit). These operate across all services
  * on this server rather than on a single service row.
  */
-function paneldns_reseller_ServerCustomButtonArray(): array
+function paneldnsreseller_ServerCustomButtonArray(): array
 {
     return [
         'Bulk Sync Sub-clients' => 'bulkSync',
@@ -189,22 +197,22 @@ function paneldns_reseller_ServerCustomButtonArray(): array
  * sub-clients. Idempotent: existing sub-clients (identified by email)
  * are linked rather than duplicated. Capped at 200 services per run.
  */
-function paneldns_reseller_bulkSync(array $params): string
+function paneldnsreseller_bulkSync(array $params): string
 {
     return PanelDnsResellerService::bulkSyncForServer($params);
 }
 
-function paneldns_reseller_testConnection(array $params): string
+function paneldnsreseller_testConnection(array $params): string
 {
     return PanelDnsResellerService::run('testConnection', $params);
 }
 
-function paneldns_reseller_resyncStatus(array $params): string
+function paneldnsreseller_resyncStatus(array $params): string
 {
     return PanelDnsResellerService::run('resyncStatus', $params);
 }
 
-function paneldns_reseller_AdminServicesTabFields(array $params): array
+function paneldnsreseller_AdminServicesTabFields(array $params): array
 {
     return PanelDnsResellerService::adminServicesTabFields($params);
 }
@@ -215,9 +223,9 @@ function paneldns_reseller_AdminServicesTabFields(array $params): array
  * Mints a 60-second SSO token and redirects the admin's browser
  * to the sub-client's authenticated portal session.
  *
- * @return array{success: bool, redirectUrl?: string, errorMsg?: string}
+ * @return array{success: bool, redirectTo?: string, errorMsg?: string}
  */
-function paneldns_reseller_AdminSingleSignOn(array $params): array
+function paneldnsreseller_AdminSingleSignOn(array $params): array
 {
     return PanelDnsResellerService::adminSso($params);
 }
@@ -227,7 +235,7 @@ function paneldns_reseller_AdminSingleSignOn(array $params): array
  * original email was lost, expired, or the client was bulk-synced
  * without a welcome email being sent.
  */
-function paneldns_reseller_resendWelcome(array $params): string
+function paneldnsreseller_resendWelcome(array $params): string
 {
     return PanelDnsResellerService::run('resendWelcome', $params);
 }
@@ -237,7 +245,7 @@ function paneldns_reseller_resendWelcome(array $params): string
  * cross-reference provisioned accounts against its service records and
  * surface any orphaned or mismatched services via the Sync tool.
  */
-function paneldns_reseller_ListAccounts(array $params): array
+function paneldnsreseller_ListAccounts(array $params): array
 {
     return PanelDnsResellerService::listAccounts($params);
 }
@@ -247,9 +255,9 @@ function paneldns_reseller_ListAccounts(array $params): array
  * "Login to PanelDNS" on their service page in the client area.
  * Works the same as AdminSingleSignOn but is triggered client-side.
  *
- * @return array{success: bool, redirectUrl?: string, errorMsg?: string}
+ * @return array{success: bool, redirectTo?: string, errorMsg?: string}
  */
-function paneldns_reseller_ServiceSingleSignOn(array $params): array
+function paneldnsreseller_ServiceSingleSignOn(array $params): array
 {
     return PanelDnsResellerService::clientSso($params);
 }
@@ -259,29 +267,21 @@ function paneldns_reseller_ServiceSingleSignOn(array $params): array
  * into its usage graphs and reporting. Returns zone count as "disk"
  * and record count as "bandwidth" — the standard pattern for DNS modules.
  */
-function paneldns_reseller_UsageUpdate(array $params): array
+function paneldnsreseller_UsageUpdate(array $params): array
 {
     return PanelDnsResellerService::usageUpdate($params);
 }
 
-function paneldns_reseller_ClientArea(array $params): array
+/**
+ * ClientArea — the product details page. CLIENT-ROUTE-01 (v1.9.3): the embedded DNS
+ * pages (zones, records, create, import, export and the do-* form targets) are chosen
+ * by the `customAction` request parameter, the pattern WHMCS's sample provisioning
+ * module uses. Up to 1.9.2 the links used `modop=custom&a=<page>`, which makes WHMCS
+ * call a function named paneldns…_<page> that never existed (and could not, for the
+ * hyphenated names), and the dispatcher read $params['customAction'], which WHMCS
+ * never sets — so the embedded manager was unreachable.
+ */
+function paneldnsreseller_ClientArea(array $params): array
 {
     return PanelDnsResellerService::clientArea($params);
-}
-
-function paneldns_reseller_ClientAreaAllowedFunctions(): array
-{
-    return [
-        // SSO redirect — handled by clientArea() sso action
-        'sso',
-        // T1.4 embedded DNS — page renders
-        'zones', 'records', 'zone-create', 'zone-import',
-        // EXPORT-01: BIND zone download (GET, streams file + exits)
-        'zone-export',
-        // T1.4 embedded DNS — mutations (form POST targets)
-        'do-zone-create', 'do-zone-import', 'do-zone-delete',
-        'do-record-create', 'do-record-update', 'do-record-delete',
-        // DNSSEC-01: enable/disable DNSSEC signing at the DNS provider
-        'do-dnssec-toggle',
-    ];
 }

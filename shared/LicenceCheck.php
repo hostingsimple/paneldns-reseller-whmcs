@@ -17,13 +17,16 @@
  * if any. This avoids "the module breaks because of a transient network
  * hiccup". The cache itself is a key/value JSON blob in the WHMCS Cache.
  *
- * NB: this lives in shared/ and is symlinked/copied into both modules.
+ * NB: this lives in shared/ and is copied into lib/ by build.php.
  */
 
 if (!defined('WHMCS')) {
     die('Access denied.');
 }
 
+// v1.9.3: guarded like the other shared classes — the module loads lib/LicenceCheck.php
+// and a second copy (shared/ in development, a stale install) must not fatal.
+if (!class_exists('PanelDnsResellerLicenceCheck', false)) {
 class PanelDnsResellerLicenceCheck
 {
     const REQUIRED_MODULE_PLATFORM = 'whmcs-platform';
@@ -140,8 +143,16 @@ class PanelDnsResellerLicenceCheck
         $explainer = match (true) {
             $sub === 'cancelled' => 'New provisioning is disabled. Existing customers keep working.',
             $sub === 'past_due'  => 'The 7-day grace period after a past-due subscription has expired. Provisioning is paused until the subscription is reinstated.',
-            $sub === 'free'      => 'The paneldns-reseller WHMCS module requires an active PanelDNS subscription. Free-tier accounts can manage DNS via the portal but cannot provision through WHMCS.',
-            $sub === 'unknown'   => 'The PanelDNS server could not be reached to verify the licence. Check the server hostname and access hash in Setup → Servers.',
+            $sub === 'free'      => 'The PanelDNS Reseller WHMCS module (paneldnsreseller) requires an active PanelDNS subscription. Free-tier accounts can manage DNS via the portal but cannot provision through WHMCS.',
+            // LICENCE-DIAG-02: show WHY (refused vs unreachable). failureReason() never
+            // carries transport detail, so the reason is safe to show; it is escaped like
+            // the reactivation URL below because it can contain PanelDNS's own text.
+            $sub === 'unknown'   => trim(
+                (trim((string) ($result['reason'] ?? '')) !== ''
+                    ? htmlspecialchars(trim((string) $result['reason']), ENT_QUOTES, 'UTF-8')
+                    : 'The PanelDNS server could not be reached to verify the licence.')
+                . ' Check the server hostname and access hash (API token) in Setup → Servers.'
+            ),
             default              => $result['reason'] ?? '',
         };
 
@@ -298,20 +309,31 @@ class PanelDnsResellerLicenceCheck
      * invoice. PanelDNS v3.91.7 exempts licence-status from the suspension gate so
      * this path should no longer see a suspension 403, but the same reasoning holds
      * for an expired or revoked token.
+     *
+     * @internal public for unit tests.
      */
-    private static function failureReason(array $resp): string
+    public static function failureReason(array $resp): string
     {
         $status = (int) ($resp['status'] ?? 0);
         $error  = trim((string) ($resp['error'] ?? ''));
 
+        // A 4xx means PanelDNS itself answered and refused (bad/expired token, missing
+        // org, suspended org). That message is PanelDNS's own text — not transport
+        // detail — and it is the actionable part, so it is kept.
         if ($status >= 400 && $status < 500) {
             return $error !== ''
                 ? "PanelDNS refused the licence check (HTTP {$status}): {$error}"
                 : "PanelDNS refused the licence check (HTTP {$status}). Check the API token.";
         }
 
-        return $error !== ''
-            ? "Cannot reach PanelDNS to verify licence: {$error}"
-            : 'Cannot reach PanelDNS to verify licence. Please try again later.';
+        // SEC-M14: status 0 is a transport failure. Never echo its error text into the
+        // admin banner: before v1.9.3 this put the raw cURL message (hostnames, IPs,
+        // TLS detail) straight back into it, against the comment at the call site. The
+        // real error is in the module log.
+        if ($status >= 500) {
+            return "PanelDNS returned HTTP {$status} while verifying the licence. Please try again later.";
+        }
+        return 'Cannot reach PanelDNS to verify licence. Please try again later (details in the module log).';
     }
+}
 }

@@ -13,8 +13,8 @@
  * Two email template names are required (operator creates them in WHMCS
  * Admin → Setup → Email Templates → Product Welcome Emails):
  *
- *   "PanelDNS Platform Welcome"   — for paneldns-platform (operator selling reseller accounts)
- *   "PanelDNS Reseller Welcome"   — for paneldns-reseller (reseller selling DNS hosting)
+ *   "PanelDNS Platform Welcome"   — for paneldnsplatform (operator selling reseller accounts)
+ *   "PanelDNS Reseller Welcome"   — for paneldnsreseller (reseller selling DNS hosting)
  *
  * If the template is missing, sendMessage() returns false and we log+swallow
  * — no fatal error blocking provisioning.
@@ -71,9 +71,13 @@ class PanelDnsResellerWelcomeMail
                     'messagename' => $templateName,
                     'id'          => $serviceId,
                     'customtype'  => 'product',
-                    // FIX-M4/M10: use json_encode instead of serialize — avoids PHP object
-                    // injection if the value is ever passed to unserialize() downstream.
-                    'customvars'  => base64_encode(json_encode($merge)),
+                    // MERGE-VARS-01 (v1.9.3, as paneldns-whmcs): a plain array. The SendEmail
+                    // reference documents customvars as type array; its string form is
+                    // base64(serialize(...)), which WHMCS unserializes. The
+                    // base64(json_encode(...)) used since FIX-M4/M10 is neither, so the
+                    // merge fields could arrive empty. An array avoids serialize() entirely,
+                    // which still meets FIX-M10's object-injection concern.
+                    'customvars'  => $merge,
                 ]);
 
                 if (($result['result'] ?? '') !== 'success') {
@@ -83,7 +87,9 @@ class PanelDnsResellerWelcomeMail
                 return true;
             }
         } catch (\Throwable $e) {
-            self::log("welcome mail exception: " . $e->getMessage(), []);
+            // SEC-M9 (ported from paneldns-whmcs): log the exception class only —
+            // getMessage() may contain PII (client email, service ID).
+            self::log("welcome mail exception: " . get_class($e), []);
         }
 
         return false;

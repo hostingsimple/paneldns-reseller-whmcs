@@ -113,7 +113,6 @@ final class PanelDnsApiSecurityTest extends TestCase
     private function callIsPrivateIp(string $ip): bool
     {
         $ref = new ReflectionMethod(PanelDnsResellerApi::class, 'isPrivateIp');
-        $ref->setAccessible(true);
         return $ref->invoke(null, $ip);
     }
 
@@ -121,7 +120,6 @@ final class PanelDnsApiSecurityTest extends TestCase
     {
         $api = new PanelDnsResellerApi('https://example.com', 'key', PanelDnsResellerApi::MODE_RESELLER);
         $ref = new ReflectionMethod(PanelDnsResellerApi::class, 'redactUrl');
-        $ref->setAccessible(true);
         return $ref->invoke($api, $url);
     }
 }

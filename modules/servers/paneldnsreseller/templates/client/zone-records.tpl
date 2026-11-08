@@ -3,9 +3,9 @@
 
 <div style="display:flex;gap:2px;border-bottom:1px solid #d1d5db;margin-bottom:18px;flex-wrap:wrap;">
     <a href="clientarea.php?action=productdetails&id={$service_id}" style="padding:10px 16px;text-decoration:none;color:#374151;font-weight:500;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;font-size:14px;">Overview</a>
-    <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=zones" style="padding:10px 16px;text-decoration:none;color:#374151;font-weight:500;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;font-size:14px;background:#fff;border-color:#d1d5db;color:#0891b2;font-weight:600;position:relative;top:1px;">DNS Zones</a>
-    <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=zone-create" style="padding:10px 16px;text-decoration:none;color:#374151;font-weight:500;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;font-size:14px;">Add Zone</a>
-    <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=zone-import" style="padding:10px 16px;text-decoration:none;color:#374151;font-weight:500;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;font-size:14px;">Import (BIND)</a>
+    <a href="clientarea.php?action=productdetails&id={$service_id}&customAction=zones" style="padding:10px 16px;text-decoration:none;color:#374151;font-weight:500;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;font-size:14px;background:#fff;border-color:#d1d5db;color:#0891b2;font-weight:600;position:relative;top:1px;">DNS Zones</a>
+    <a href="clientarea.php?action=productdetails&id={$service_id}&customAction=zone-create" style="padding:10px 16px;text-decoration:none;color:#374151;font-weight:500;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;font-size:14px;">Add Zone</a>
+    <a href="clientarea.php?action=productdetails&id={$service_id}&customAction=zone-import" style="padding:10px 16px;text-decoration:none;color:#374151;font-weight:500;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;font-size:14px;">Import (BIND)</a>
 </div>
 {if $flash}<div style="background:{if $flash.type=='success'}#dcfce7;border:1px solid #86efac;color:#15803d{else}#fee2e2;border:1px solid #fca5a5;color:#991b1b{/if};padding:12px 16px;border-radius:6px;margin-bottom:14px;font-size:13px;">{$flash.msg|escape}</div>{/if}
 
@@ -20,14 +20,14 @@
 <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:14px;">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
         <h2 style="margin:0;font-size:18px;color:#111827;">
-            <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=zones" style="color:#9ca3af;text-decoration:none;font-weight:400;">DNS Zones</a>
+            <a href="clientarea.php?action=productdetails&id={$service_id}&customAction=zones" style="color:#9ca3af;text-decoration:none;font-weight:400;">DNS Zones</a>
             <span style="color:#d1d5db;margin:0 6px;">›</span>
             <span style="font-family:monospace;">{$zone.name|escape}</span>
         </h2>
         <div style="display:flex;align-items:center;gap:12px;">
             <span style="font-size:12px;color:#9ca3af;">{$records|@count} record{if $records|@count != 1}s{/if}</span>
             {* EXPORT-01: BIND download link — GET, streams file + exits *}
-            <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=zone-export&zone={$zone.id}"
+            <a href="clientarea.php?action=productdetails&id={$service_id}&customAction=zone-export&zone={$zone.id}"
                style="font-size:12.5px;color:#6b7280;text-decoration:none;border:1px solid #d1d5db;padding:4px 10px;border-radius:5px;font-weight:500;"
                title="Download this zone as a BIND-format text file">
                 &#8615; Export (BIND)
@@ -45,7 +45,7 @@
     <h3 style="margin:0 0 14px;font-size:15px;color:#111827;">
         {if $edit_record}Edit record{else}Add a record{/if}
     </h3>
-    <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a={if $edit_record}do-record-update{else}do-record-create{/if}">
+    <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&customAction={if $edit_record}do-record-update{else}do-record-create{/if}">
         <input type="hidden" name="csrf" value="{$csrf|escape}">
         <input type="hidden" name="zone_id" value="{$zone.id}">
         {if $edit_record}<input type="hidden" name="record_id" value="{$edit_record.id}">{/if}
@@ -94,7 +94,7 @@
                 {if $edit_record}Save changes{else}Add record{/if}
             </button>
             {if $edit_record}
-            <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=records&zone={$zone.id}"
+            <a href="clientarea.php?action=productdetails&id={$service_id}&customAction=records&zone={$zone.id}"
                style="padding:8px 18px;color:#6b7280;text-decoration:none;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">Cancel edit</a>
             {/if}
         </div>
@@ -126,8 +126,8 @@
                 <td style="padding:10px 12px;text-align:right;color:#6b7280;">{$r.ttl|escape}</td>
                 <td style="padding:10px 12px;text-align:right;color:#6b7280;">{if $r.priority !== null}{$r.priority|escape}{else}—{/if}</td>
                 <td style="padding:10px 12px;text-align:right;white-space:nowrap;">
-                    <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=records&zone={$zone.id}&edit={$r.id}" style="color:#0891b2;text-decoration:none;font-size:12.5px;font-weight:500;margin-right:10px;">Edit</a>
-                    <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=do-record-delete" style="display:inline;"
+                    <a href="clientarea.php?action=productdetails&id={$service_id}&customAction=records&zone={$zone.id}&edit={$r.id}" style="color:#0891b2;text-decoration:none;font-size:12.5px;font-weight:500;margin-right:10px;">Edit</a>
+                    <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&customAction=do-record-delete" style="display:inline;"
                           onsubmit="return confirm('Delete this ' + {$r.type|json_encode} + ' record?');">
                         <input type="hidden" name="csrf" value="{$csrf|escape}">
                         <input type="hidden" name="zone_id" value="{$zone.id}">
@@ -169,7 +169,7 @@
             <span style="display:inline-block;padding:2px 9px;border-radius:8px;background:#f3f4f6;color:#6b7280;font-size:11.5px;font-weight:600;">Disabled</span>
             {/if}
         </div>
-        <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=do-dnssec-toggle"
+        <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&customAction=do-dnssec-toggle"
               onsubmit="return confirm('{if $dnssec.enabled}Disable DNSSEC signing on this zone? Remember to remove the DS records from your registrar.{else}Enable DNSSEC signing on this zone?{/if}');">
             <input type="hidden" name="csrf"    value="{$csrf|escape}">
             <input type="hidden" name="zone_id" value="{$zone.id}">
@@ -213,7 +213,7 @@
 
 <div style="margin-top:14px;text-align:center;font-size:12px;color:#9ca3af;">
     Need advanced features?
-    <a href="clientarea.php?action=productdetails&id={$service_id}&modop=custom&a=sso" style="color:#0891b2;">Open in full DNS portal →</a>
+    <a href="clientarea.php?action=productdetails&id={$service_id}&customAction=sso" style="color:#0891b2;">Open in full DNS portal →</a>
 </div>
 
 </div>

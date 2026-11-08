@@ -5,15 +5,8 @@
 
 <div class="paneldns-client" style="max-width:880px; margin:24px auto;">
 
-    {* CONSENT-R-02: re-consent banner when sub-client terms are behind platform version. *}
-    {if $paneldns_requires_consent && $paneldns_consent_url}
-        <div style="background:#fef3c7; border:1px solid #f59e0b; border-radius:8px; padding:12px 16px; margin-bottom:16px; font-size:13.5px; color:#92400e;">
-            <strong>Action required:</strong> Your account terms have been updated.
-            <a href="{$paneldns_consent_url|escape}" target="_blank" rel="noopener noreferrer" style="color:#92400e; font-weight:600;">
-                Review and accept the updated terms &rarr;
-            </a>
-        </div>
-    {/if}
+    {* CONSENT-R-04 (v1.9.3): the re-consent banner was removed — it read fields
+       (requires_consent, portal_sso_url) that PanelDNS's sub-client resource never returns. *}
 
     {if $paneldns_status === 'suspended'}
         <div style="background:#fef3c7; border:1px solid #fbbf24; padding:12px 16px; border-radius:8px; color:#92400e; font-size:13px; margin-bottom:16px;">
@@ -36,11 +29,11 @@
         {if $paneldns_sub_client_id}
             <div style="display:flex;gap:10px;flex-wrap:wrap;">
                 {* T1.4: primary CTA is now the in-page DNS manager *}
-                <a href="clientarea.php?action=productdetails&id={$serviceid}&modop=custom&a=zones"
+                <a href="clientarea.php?action=productdetails&id={$serviceid}&customAction=zones"
                    style="background:#0891b2; color:#fff; padding:10px 18px; border-radius:8px; text-decoration:none; font-weight:600; font-size:14px; display:inline-block;">
                     Manage DNS Zones →
                 </a>
-                <a href="clientarea.php?action=productdetails&id={$serviceid}&modop=custom&a=sso"
+                <a href="clientarea.php?action=productdetails&id={$serviceid}&customAction=sso"
                    style="background:#fff; color:#0891b2; padding:10px 18px; border:1px solid #0891b2; border-radius:8px; text-decoration:none; font-weight:600; font-size:14px; display:inline-block;">
                     Open full DNS Portal
                 </a>

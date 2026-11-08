@@ -4,6 +4,169 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.9.3] — 2026-11-08
+
+### Upgrade notes — the module was renamed
+
+- **Module name is now `paneldnsreseller` (MODULE-NAME-01).** The folder was `paneldns-reseller`
+  while every function was `paneldns_reseller_*`; WHMCS calls `<folder>_<Function>`, so it could
+  call none of them, and WHMCS module names must be one lowercase word ("Choosing a Name",
+  developers.whmcs.com). Folder, main file (`paneldnsreseller.php`), every function prefix and
+  every `servertype` filter now use `paneldnsreseller`; the display name is unchanged.
+  **Delete the old `modules/servers/paneldns-reseller/` folder** after uploading.
+- **Automatic migration.** `lib/PanelDnsResellerMigration.php` rewrites `tblproducts.servertype`
+  and `tblservers.type` from `paneldns-reseller` / `paneldns_reseller` to `paneldnsreseller`
+  through Capsule — idempotent, run on `AdminAreaPage` behind two existence checks (once per
+  request) and at the start of `DailyCronJob`. WHMCS only loads a provisioning module's
+  `hooks.php` once a product using it has been saved, so INSTALL.md also gives the two `UPDATE`
+  statements and asks you to save each PanelDNS product's Module Settings once.
+- The sibling operator module is renamed to `paneldnsplatform` at the same time and now
+  reconciles only its own services, so this module's drift sync is scoped to its own too
+  (DRIFT-SCOPE-01) — it used to reconcile both modules' services. Every servertype filter
+  matches `paneldnsreseller` plus the legacy spellings, so hooks keep working before the
+  migration has run; none of them touches a platform-module name.
+- **Re-check the API token's scopes** — see INSTALL.md → "Which feature needs which scope".
+
+### Fixed — breaking defects
+
+- **The release ZIP could not load (BUILD-ZIP-01).** Since 1.4.1 `PanelDnsResellerService.php`
+  and `hooks.php` required `__DIR__ . '/../../../shared/…'` — i.e. `modules/shared/`, which the
+  ZIP does not contain — so the module fataled on load. Everything now requires the `lib/`
+  copies that `build.php` produces, and `build.php` refuses to build if any `require` points
+  outside the module folder. A new test builds the ZIP, checks every require resolves inside
+  it, and loads the module file and `hooks.php` from the extracted ZIP in a fresh PHP process.
+- **`getLegalVersion()` was missing from the shipped client (CONSENT-R-01).** It existed only in
+  an uncommitted `lib/` copy, and `build.php` overwrites `lib/` from `shared/`, so every
+  CreateAccount died with "Call to undefined method". It is now in `shared/PanelDnsApi.php`,
+  against `GET /api/v1/legal-version` — which answers `{"ok": true, "version": "…"}` with the
+  version at the top level — and soft-fails to `''` so provisioning continues without the
+  consent fields.
+- **Zone import sent the wrong field (IMPORT-01).** The module posted `bind`; PanelDNS's
+  `POST /api/v1/zones/{id}/import` requires `zone_file` (max 51,200), so every import failed
+  with 422. It also read a `data.imported` count the endpoint never returns (`data` is `null`).
+  The form now sends `zone_file`, caps it at 50 KB with a clear "split the file" message (was
+  512 KB, so anything over 50 KB was rejected by PanelDNS anyway), and reports success without
+  an invented count. The import page no longer claims the import is additive — PanelDNS hands
+  the file to the zone's provider, which may replace existing records.
+- **Embedded DNS manager was unreachable (CLIENT-ROUTE-01).** Its links used
+  `modop=custom&a=<page>`, which makes WHMCS call a module function per page that never existed
+  (and could not, for the hyphenated names), and the dispatcher read `$params['customAction']`,
+  which WHMCS never sets. Pages are now selected with `?customAction=<page>` (the WHMCS sample
+  module's pattern) and every template link and form uses it; `ClientAreaAllowedFunctions` was
+  removed. `do-*` actions now require POST.
+- **DNSSEC toggle never ran (DNSSEC-02):** `do-dnssec-toggle` was missing from the client-area
+  dispatch list.
+- **Admin service tab crashed when a limit was set.** The usage bars' `sprintf` format
+  contained a bare `100%;`, which PHP 8 rejects with `ValueError: Unknown format specifier ";"` —
+  i.e. on every service with a zone or record limit.
+- **Hooks never acted (MODULE-NAME-01).** The domain, addon, client-edit and payment hooks
+  filtered on `servertype = 'paneldns_reseller'`, a name no product carried.
+
+### Fixed
+
+- **Paging (PAGING-01).** PanelDNS pages `/api/v1/sub-clients` and `/api/v1/zones` at a fixed 50
+  and ignores `per_page`. ListAccounts asked for 100 and stopped on the first short page, so the
+  WHMCS Sync tool only ever saw 50 sub-clients; the client-area zone list and import picker
+  showed at most 50 zones. A new `getAllPages()` follows `meta.total` (ListAccounts up to 5,000
+  sub-clients, a client's zones up to 1,000, records up to 10,000 at 500 per page); a failed page
+  makes ListAccounts fail rather than return a partial list. The admin tab shows "… and N more"
+  from `meta.total`, and the domain-delete hook looks the zone up with `?name=` across pages.
+- **Same email, second service (DUP-EMAIL-01).** PanelDNS requires a sub-client email to be
+  unique per org, so CreateAccount failed with a bare "HTTP 422". On that 422 the module now
+  looks the email up (exact match, all pages, org id checked against the token's org) and:
+  links back automatically only when the sub-client belonged to a **terminated service of the
+  same WHMCS client** (re-order after cancellation — the old service's pending grace delete is
+  cancelled); otherwise it links nothing and says why — "this client already has a PanelDNS
+  account on service #N (one sub-client per email)", "linked to another client's service", or
+  "not linked to any service; enter its ID in Dedicated IP and run Create if this client owns
+  it". An existing sub-client is never linked on email alone (WHMCS does not verify client
+  emails), and Bulk Sync no longer links a sub-client that another live service already uses.
+- **Grace-period cron (GRACE-03/04/05).** It had no servertype filter, so it could act on any
+  module's Terminated service carrying the marker; it now filters to `paneldnsreseller`. It
+  ignored the delete result and cleared the marker even when PanelDNS refused; the marker is now
+  cleared only on success (or 404, already gone), and the failure is logged for retry. The
+  marker is appended to the service notes instead of overwriting them, and removed on its own.
+- **ClientEdit sent fields PanelDNS ignores (CLIENT-SYNC-02).** `PATCH /api/v1/sub-clients/{id}`
+  accepts `name`, `status`, `zone_limit`, `max_records`; the hook also sent `email` and `locale`,
+  which were silently dropped. It now sends only `name` (capped at 128), for every active or
+  suspended service of the client, and logs a failed sync.
+- **SSO buttons never redirected (SSO-REDIRECT-01).** `ServiceSingleSignOn` /
+  `AdminSingleSignOn` returned `redirectUrl`; WHMCS reads `redirectTo`
+  (developers.whmcs.com/provisioning-modules/single-sign-on/).
+- **Welcome-email merge fields could arrive empty (MERGE-VARS-01).** `customvars` was sent to
+  `SendEmail` as `base64(json_encode(…))`, which is neither of the forms WHMCS documents (an
+  array, or `base64(serialize(…))`). It is now a plain array, as in paneldns-whmcs.
+- **Secrets in the module log (LOG-SCRUB-01).** Only top-level request keys were redacted, the
+  response was logged raw — an SSO `login_url` carries a live one-time token — and the
+  replace-vars argument of `logModuleCall()` held key *names* ('password', 'token'), so WHMCS
+  masked those words rather than any secret. Requests and responses are now scrubbed at any
+  depth (any `*password*`, `*token*`, `*secret*`, `api_key`, `authorization`, `access_hash`,
+  `private_key` key, plus `?token=` / `?password=` style parameters inside strings), and
+  replace-vars carries the secret *values* (the API key and every value found under such a key).
+- **Re-consent banner removed (CONSENT-R-04).** It read `sub_client.requires_consent` and
+  `portal_sso_url`, neither of which PanelDNS's sub-client resource returns, so it could never
+  show. The README claim is removed with it.
+- **Errors (API-ERRORS-01).** Error bodies are parsed in all three PanelDNS shapes: the `{ok,
+  error}` envelope, Laravel validation `message` + `errors` (each field's first message), and a
+  bare `message` (the "REST API switched off" 403, the IP-allowlist 403, 401). Field errors are
+  also returned under `errors`.
+- **Rate limits (RATE-429-01).** A 429's `Retry-After` is captured and reported ("PanelDNS rate
+  limit reached (retry in N seconds)"); no further calls go to that server+token until it has
+  passed, so the drift sync, Bulk Sync (which now stops early) and paging do not hammer a server
+  that said slow down.
+- **Fewer API calls per page (RATE-CALLS-01).** Org nameservers cached 5 min (the overview used to
+  fetch them on every view), org summary 5 min, client overview summary + zone health 60 s
+  together, admin-tab zone list cached with the summary, DNSSEC status 5 min (dropped on
+  toggle/import), zone ownership memoised per request. The record update/delete no longer GETs
+  the record first (PanelDNS scopes the record to the zone itself), and zone create no longer
+  makes a quota pre-flight call that read fields the summary never returns — PanelDNS's own 422
+  message is shown instead. An overview view is now 0–1 calls with warm caches (was 3–4); a
+  record edit is 5 (was 7).
+- **SEC-M14: transport errors redacted.** The raw cURL message (hostnames, IPs, TLS detail) is
+  kept in the module log only; callers get "Could not connect to PanelDNS (network error N)".
+  The licence `failureReason()` no longer echoes it into the admin banner either, while still
+  showing PanelDNS's own refusal text for a 4xx — and the banner now shows that reason.
+- **CreateAccount paths.** A WHMCS service password shorter than 12 characters (PanelDNS's
+  minimum) made CreateAccount fail with 422; it is now omitted and the sub-client signs in by
+  SSO. A stored sub-client id that no longer exists upstream (404) is re-provisioned instead of
+  failing. Re-running Create on a linked service re-applies the product's limits.
+- **Welcome email never sent when ticked (WELCOME-01).** WHMCS stores a ticked yesno option as
+  `on`; the check compared against `yes`.
+- **Records page after a change (REDIRECT-01).** After adding, editing or deleting a record, or
+  toggling DNSSEC, the client was sent to the zone list (the zone id was only in the POST body);
+  they now land back on that zone's records.
+- The record manager's nameserver card now honours the product's NS1–NS4 overrides, like the
+  overview and the welcome email.
+- The embedded manager's own rate limit answers with a page, not a bare JSON body.
+- `PanelDnsResellerLicenceCheck` gained the `class_exists()` guard the other shared classes got
+  in 1.9.1.
+
+### Security
+
+- **SEC-M9 ported from paneldns-whmcs:** the welcome-mail exception log records the exception
+  class only (the message can contain the client's email / service ID).
+- Zone file content is logged by size only.
+
+### Docs
+
+- INSTALL.md lists the six scopes (adding the missing `records:read` / `records:write`) and a
+  per-feature scope table, the plan rate limits, the rename upgrade steps with the SQL, and a
+  note that tokens minted before PanelDNS 3.98.0 have no org binding and should be re-minted.
+- README: typos ("pervice", "SSOtoken", the broken `CHACGENELOG.md` link), PHP badge 8.2+,
+  directory structure and security sections; CLAUDE.md version table brought up to date;
+  `build.php` default version 1.9.3.
+
+### Tests
+
+New: ZIP build + self-containment + load test; `getLegalVersion`; import field and 50 KB cap;
+migration SQL builder and Capsule path; paging (`getAllPages`, ListAccounts, zone list);
+grace-cron filter and success check; error-body parsing and 429 handling; the duplicate-email
+policy; SSO `redirectTo`; `customvars` as an array; nested-secret and SSO-token log scrubbing;
+yes/no option values. The tests now load the module through its shipped `lib/` layout. Run
+locally on PHP 8.5.6 only (the release workflow runs them on 8.2; there is no PR CI).
+
+---
+
 ## [1.9.2] — 2026-08-27
 
 ### Fixed

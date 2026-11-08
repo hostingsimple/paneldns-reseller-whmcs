@@ -11,6 +11,23 @@ complete without errors before you move to the next.
 - PanelDNS reseller account with an API token (see INSTALL.md §1)
 - Module installed and server configured (see INSTALL.md §2–4)
 - Welcome email template created (see INSTALL.md §5)
+- API token with all six scopes (`sub_clients:*`, `zones:*`, `records:*`)
+
+---
+
+## 0 — Upgrade from 1.9.2 or earlier only
+
+1. Confirm `modules/servers/paneldns-reseller/` is **gone** and
+   `modules/servers/paneldnsreseller/` exists
+2. Run, against the WHMCS database:
+   `SELECT COUNT(*) FROM tblproducts WHERE servertype IN ('paneldns-reseller','paneldns_reseller');`
+   and the same for `tblservers.type`
+3. ✅ Expected: both `0` (after the SQL in INSTALL.md → Upgrading, or after an admin page
+   load once the hooks are registered); **Admin → Activity Log** shows
+   "PanelDNS Reseller: migrated module name…" if the module did it
+4. Open the PanelDNS product → **Module Settings**
+5. ✅ Expected: module shows *PanelDNS (Reseller — Sub-client DNS Hosting)*; click
+   **Save Changes** once so WHMCS loads the module's hooks
 
 ---
 
@@ -104,7 +121,8 @@ If the email is missing: verify the template exists at
 
 1. In the client area, click **Manage DNS Zones → Add Zone**
 2. Enter a test domain name (e.g. `test-paneldns.example.com`)
-3. ✅ Expected: zone appears in the list; PanelDNS dashboard shows it too
+3. ✅ Expected: zone appears in the list; PanelDNS dashboard shows it too; the browser
+   address bar shows `…&customAction=zones` (not `modop=custom`)
 
 ---
 
@@ -112,7 +130,20 @@ If the email is missing: verify the template exists at
 
 1. Click **Manage** next to the zone
 2. Add an A record: name `@`, content `1.2.3.4`, TTL 300
-3. ✅ Expected: record appears in the table; no API error
+3. ✅ Expected: record appears in the table and you stay on that zone's records page; no API error
+4. Edit the record's TTL to 600
+5. ✅ Expected: "Record updated."; still on the records page
+
+---
+
+## 12b — Import a BIND zone file
+
+1. Click **Import (BIND)**, choose the test zone, paste
+   `www 3600 IN A 192.0.2.10`
+2. ✅ Expected: "Zone file imported." and the records page lists the imported record
+3. Paste more than 50 KB of text and submit
+4. ✅ Expected: "Zone file too large (… KB). PanelDNS accepts up to 50 KB per import" —
+   and no `POST …/import` entry in the Module Log
 
 ---
 
@@ -120,6 +151,18 @@ If the email is missing: verify the template exists at
 
 1. Go to **Admin → Setup → Servers → [your PanelDNS server] → List Accounts**
 2. ✅ Expected: the test sub-client appears in the results and matches the WHMCS service
+3. If the org has more than 50 sub-clients: ✅ the count equals the PanelDNS dashboard's
+   sub-client count (not 50)
+
+---
+
+## 13b — Second DNS order by the same client
+
+1. Order the PanelDNS product a second time as the same test client and accept it
+2. ✅ Expected: Create fails with "This client already has a PanelDNS account
+   (sub-client #N) on service #M … Upgrade service #M instead" — not "HTTP 422" — and the
+   new service's Dedicated IP stays empty
+3. Cancel/delete the second test service
 
 ---
 

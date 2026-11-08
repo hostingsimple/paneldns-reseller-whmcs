@@ -59,8 +59,8 @@ jobs:
 
             1. Download `paneldns-reseller-whmcs-${{ steps.version.outputs.VERSION }}.zip`
             2. Extract into your WHMCS root — the `modules/` folder merges cleanly
-            3. See [INSTALL.md](https://github.com/Veeau/paneldns-reseller-whmcs/blob/${{ github.ref_name }}/INSTALL.md) for full setup
+            3. See [INSTALL.md](https://github.com/hostingsimple/paneldns-reseller-whmcs/blob/${{ github.ref_name }}/INSTALL.md) for full setup
 
             ## What changed
 
-            See [CHANGELOG.md](https://github.com/Veeau/paneldns-reseller-whmcs/blob/${{ github.ref_name }}/CHANGELOG.md)
+            See [CHANGELOG.md](https://github.com/hostingsimple/paneldns-reseller-whmcs/blob/${{ github.ref_name }}/CHANGELOG.md)

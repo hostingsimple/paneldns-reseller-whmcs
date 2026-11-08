@@ -56,26 +56,7 @@ final class EmbeddedDnsManagerSecurityTest extends TestCase
         ];
     }
 
-    // ── BIND import size cap ──────────────────────────────────────────────────
-
-    public function test_512kb_cap_constant_is_correct(): void
-    {
-        // The cap is 512 * 1024 bytes = 524288. Verify the arithmetic used
-        // in EmbeddedDnsManager::doZoneImport() matches the documented limit.
-        $this->assertSame(524288, 512 * 1024);
-    }
-
-    public function test_string_just_at_limit_is_accepted(): void
-    {
-        $payload = str_repeat('A', 512 * 1024);
-        $this->assertFalse(strlen($payload) > 512 * 1024);
-    }
-
-    public function test_string_one_byte_over_limit_is_rejected(): void
-    {
-        $payload = str_repeat('A', 512 * 1024 + 1);
-        $this->assertTrue(strlen($payload) > 512 * 1024);
-    }
+    // The BIND import size cap is exercised for real in EmbeddedDnsManagerTest.
 
     // ── CSRF token properties ─────────────────────────────────────────────────
 
