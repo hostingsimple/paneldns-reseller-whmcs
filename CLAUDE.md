@@ -36,6 +36,7 @@
 | `1.9.3` | 2026-11-08 | Rename to `paneldnsreseller` + migration; self-contained ZIP; `getLegalVersion` shipped; import `zone_file`; paging; duplicate email; grace cron; errors/429 |
 | `1.9.4` | 2026-11-18 | Security: no account linking by email — Bulk Sync reports matches, duplicate-email Create never links, sub-client id from Dedicated IP only; grace cron skips a re-linked sub-client |
 | `1.9.5` | 2026-11-18 | Security: zones only for the client's own domains (configoption12 opt-out with overlap check); auto-create on `DomainTransferCompleted`, not `AfterRegistrarTransfer`; generic "unavailable" for name conflicts; PAY-02: removed the `InvoicePaymentSuccess` hook that unsuspended on any payment |
+| `1.9.6` | 2026-11-18 | Security (rescan Medium/Low): drift sync treats WHMCS as source of truth, never terminates on 404; only `PanelDNS +N Zones` addons, limit recomputed; client-area DNS needs an Active service and the `productsso` permission; Terminate deletes the zones first; delete-confirm attribute escaping; generic 0/5xx client errors; SSRF resolve-once-and-pin; deterministic service for domain hooks |
 
 ## Overview
 
@@ -115,6 +116,61 @@ it suspended for non-payment ("Overdue on Payment"), and `InvoicePaid` runs afte
 `InvoicePaidPreEmail`, `AddInvoicePayment`) pass `invoiceid`, not `userid`.
 `tests/InvoicePaymentTest.php` fails if any of them is registered.
 
+### WHMCS is the source of truth for status (v1.9.6, DRIFT-SOT-01, DRIFT-404-01)
+
+`PanelDnsResellerDriftSync::decide()` only moves a service towards the more restrictive
+state (Active → Suspended/Terminated, Suspended → Terminated) and re-suspends in PanelDNS a
+sub-client that is active while WHMCS has the service Suspended. It never writes Active and
+never touches a Pending service (logged for review). A 404 never terminates: it adds
+`[paneldns-drift:not-found]` to the admin notes, and only when 404s are the exception on
+that server; a mostly-404 server (3+) or a 401/403 is a token/org mistake and is left
+alone for the run. Do not add any path that copies an upstream status into WHMCS that is
+less restrictive than WHMCS's.
+
+### Client-area access (v1.9.6, WHMCS-PERM-01, SVC-STATUS-01)
+
+`clientArea()` gates `sso` and every `EMBEDDED_ACTIONS` page and form on two checks; a
+refusal renders the overview with `paneldns_notice`:
+
+- `$params['status'] === 'Active'` (a missing status refuses).
+- `userMayManage()`: `\WHMCS\Authentication\CurrentUser` `user()` + `client()` (the client
+  must be `$params['userid']`), then `Client::isOwnedBy($user)`, else
+  `localAPI('GetUserPermissions', ['user_id', 'client_id'])` must list `productsso`
+  ("Perform Single Sign-On", the permission WHMCS checks for ServiceSingleSignOn). Fails
+  closed. `tests/Support/FakeWhmcsAuth.php` stands in for CurrentUser. A new client-area
+  action must be in `EMBEDDED_ACTIONS` (or be `sso`) so the gate covers it.
+
+### Addon zone packs (v1.9.6, ADDON-ZONES-01)
+
+Only a predefined addon whose whole name matches `ZONE_PACK_PATTERN` (`PanelDNS +N Zones`)
+grants zones; never add a fallback number. The zone limit is recomputed, never adjusted:
+`limits()` = product/Configurable Option limit + `addonZones()` (active zone packs from
+`tblhostingaddons`), 0 stays 0. The five addon state hooks re-apply it through
+`localAPI('ModuleChangePackage')`, with `$addonStateOverride` carrying the state the addon
+is moving to.
+
+### Terminate deletes zones (v1.9.6, TERM-ZONES-01)
+
+PanelDNS's `DELETE /sub-clients/{id}` deletes only the row (zones FK `nullOnDelete`, so
+zones would stay live as org zones). `deleteSubClientZones()` runs before every
+sub-client delete (TerminateAccount, grace cron), deletes only zones whose `sub_client_id`
+matches, and on any failure keeps the sub-client (grace marker kept).
+
+### Errors, templates, SSRF, domain hooks (v1.9.6)
+
+- ERR-LEAK-01: client-visible PanelDNS errors go through
+  `PanelDnsEmbeddedDnsManager::clientError()`: status 0 or ≥ 500 → `MSG_SERVER_ERROR`,
+  detail to `logModuleCall()`; 4xx text is shown.
+- TPL-ATTR-01: never output a Smarty variable inside an `on…="…"` attribute or
+  `json_encode` outside `<script>`; pass values in `data-…="{$v|escape}"`.
+  `tests/TemplateAttributeEscapingTest.php` enforces it for every template.
+- SSRF-PIN-01: `PanelDnsResellerApi::request()` resolves the host once per client
+  (`resolveHost()`), refuses private/reserved IPv4 before sending and pins cURL with
+  `CURLOPT_RESOLVE`. The callers' `gethostbyname()` checks are fail-fast only.
+- DOMAIN-SVC-01: `serviceForDomain()` picks the client's DNS service for domain hooks:
+  candidates have a sub-client and the option ticked; several → the one with the domain's
+  `orderid`, else none (logged). Never `->first()` without a rule.
+
 ### Shared files — keep in sync with paneldns-whmcs
 
 The following files exist in BOTH repos and must be kept in sync manually:
@@ -134,7 +190,9 @@ The copies here differ by design in their class names (`PanelDnsReseller*`, with
 the reseller endpoint, error/429 parsing, `getAllPages()`, `findSubClientByEmail()`,
 redacted transport errors, deep log scrubbing, DriftSync scoped to this module, the
 LicenceCheck guard and failure reasons; WelcomeMail's array `customvars` mirrors
-paneldns-whmcs PR #1) — reconcile these with paneldns-whmcs.
+paneldns-whmcs PR #1) — reconcile these with paneldns-whmcs. **v1.9.6 changed
+`shared/DriftSync.php` (WHMCS as source of truth, 404 handling, test seam) and
+`shared/PanelDnsApi.php` (SSRF resolve-once-and-pin, `resolveHost()` seam) here first.**
 
 build.php copies `shared/*.php` into `modules/servers/paneldnsreseller/lib/` (gitignored)
 and refuses to build if any `require` leaves the module folder. Module code must only
@@ -172,6 +230,9 @@ API facts the module depends on (re-check when PanelDNS changes):
 - `/api/v1/sub-clients` and `/api/v1/zones` page at a **fixed 50** and ignore `per_page`;
   `/zones/{id}/records` honours `per_page` 1–500. Page by `meta.total` (`getAllPages()`).
 - `POST /zones/{id}/import` takes `zone_file` (max 51,200) and returns `data: null`.
+- `DELETE /sub-clients/{id}` deletes only the sub-client row; its zones keep resolving as
+  org-level zones (FK `nullOnDelete`). Delete them first (`DELETE /zones/{id}`, which
+  removes them at the provider). There is no call that suspends a sub-client's zones.
 - `PATCH /sub-clients/{id}` accepts only `name`, `status`, `zone_limit`, `max_records`
   (email is fixed; `locale` is not accepted, despite the v3.22.0 column).
 - `POST /sub-clients` requires the email unique per org (422 `errors.email`) and a

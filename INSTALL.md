@@ -44,7 +44,8 @@ Licence status, legal version, org summary and nameservers need no scope.
 
 | Feature | Scopes |
 |---|---|
-| Create / Suspend / Unsuspend / Terminate / Change Package | `sub_clients:write` |
+| Create / Suspend / Unsuspend / Change Package | `sub_clients:write` |
+| Terminate (and the grace-period delete), which deletes the sub-client's zones first (since 1.9.6) | `sub_clients:write` + `zones:read` + `zones:write` |
 | Create when the client's email already has a sub-client (duplicate-email check) | `sub_clients:read` |
 | "Login to PanelDNS" (admin + client SSO), welcome email | `sub_clients:write` |
 | Admin service tab, Resync Status, usage graphs, WHMCS Sync (ListAccounts), daily drift sync | `sub_clients:read` (+ `zones:read` for the zone names on the admin tab) |
@@ -329,18 +330,26 @@ for provider-specific setup.
 You can sell zone-limit upgrades as WHMCS product addons:
 
 1. In WHMCS Admin, go to **Setup → Products/Services → Product Addons**
-2. Create a new addon with a name that includes a number and the word "zones" or
-   "zone", e.g.:
+2. Create a new addon named exactly **`PanelDNS +N Zones`**, where N is the number of
+   extra zones, e.g.:
    - `PanelDNS +10 Zones`
-   - `Extra 25 Zones`
-   - `DNS Zone Pack (+5)`
+   - `PanelDNS +1 Zone`
+
+   Letter case and spacing do not matter (`paneldns + 25 zones` works). Any other name,
+   such as `Extra 25 Zones` or `DNS Zone Pack (+5)`, is **not** a zone pack and changes
+   nothing.
 3. Link the addon to your PanelDNS product(s)
 
-When a client activates the addon, the module automatically raises their PanelDNS
-zone limit by the number in the addon name. Suspending or terminating the addon
-lowers it back.
+The sub-client's zone limit is always the product's Zone Limit (or the customer's "Zone
+Limit" Configurable Option) plus the zones of every **active** zone-pack addon on the
+service. The module sets it again whenever an addon is activated, unsuspended, suspended,
+terminated or cancelled, and on every package change, by running the module's Change
+Package through WHMCS. Repeating an event, or events arriving in a different order, gives
+the same limit. A product Zone Limit of 0 (inherit the org plan) stays 0.
 
-If no number is found in the addon name, 5 extra zones is assumed as a fallback.
+Before 1.9.6 every addon on the service counted, with 5 zones when its name had no number,
+and the limit was adjusted rather than recomputed. Rename older zone-pack addons to the
+pattern above when upgrading.
 
 ---
 
@@ -373,10 +382,27 @@ still be useful to clients even after a domain expires.
 
 ## Daily drift sync
 
-The module registers a WHMCS cron hook that runs nightly. It:
-- Compares the WHMCS service status with the PanelDNS sub-client status
-- Corrects any drift (e.g. a sub-client that was manually changed in PanelDNS)
-- Logs discrepancies to the WHMCS Activity Log
+The module registers a WHMCS cron hook that runs nightly. It compares the WHMCS service
+status with the PanelDNS sub-client status. **WHMCS is the source of truth** (since
+1.9.6), so a difference is only ever settled towards the more restrictive state:
+
+| WHMCS | PanelDNS | What the sync does |
+|---|---|---|
+| Active | suspended | sets the service **Suspended** in WHMCS |
+| Active or Suspended | cancelled | sets the service **Terminated** in WHMCS |
+| Suspended | active | **suspends the sub-client again** in PanelDNS; WHMCS is not changed |
+| Pending (or another status) | active | writes an Activity Log line for you to review; nothing is changed |
+| any | not found (404) | writes an Activity Log line and adds `[paneldns-drift:not-found]` to the service's admin notes; the status is not changed |
+
+If three or more lookups on one server come back "not found" and they are most of that
+server's lookups, or PanelDNS refuses the token (HTTP 401/403), the sync assumes the
+server's API token is wrong (for example a token of another PanelDNS organisation). It
+changes and flags nothing on that server, stops for the night, and writes one Activity Log
+line naming the server.
+
+Before 1.9.6 the sync copied the PanelDNS status into WHMCS: a WHMCS suspension was lifted
+the night after the sub-client was re-activated in PanelDNS, and every "not found" set the
+service Terminated.
 
 It covers this module's services only; the operator module (`paneldnsplatform`)
 reconciles its own. No setup is required beyond the standard WHMCS
@@ -433,6 +459,15 @@ screens and the client area only ever show a generic "could not connect" line.
 4. **1.9.5:** clients can now add zones only for domains on their own WHMCS account. On
    products whose customers host domains registered elsewhere, tick **Allow Zones for
    Domains Not in This Account** (Step 4).
+5. **1.9.6:**
+   - Only addons named `PanelDNS +N Zones` add zones. Rename other zone-pack addons
+     (Step 9). Existing limits change on the next addon or package change of each service.
+   - Users of a client account (not the owner) need the **Perform Single Sign-On**
+     permission to use the DNS manager and the portal button in the client area. Owners
+     grant it under **Account → User Management**.
+   - After the first nightly run, look for `[paneldns-drift:not-found]` in service notes
+     and `drift sync` lines in the Activity Log (see Daily drift sync). Before 1.9.6 those
+     services would have been terminated.
 
 ### From 1.9.2 or earlier — the module was renamed
 
@@ -530,8 +565,30 @@ Sub-client IDs stored on services (`tblhosting.dedicatedip`) are not touched.
   if a provisioned service is found for that client
 - The domain must be on that client's account. The Activity Log shows
   `auto-create zone … skipped` when it is not.
+- If the client has **several** DNS services with Auto-Create on, the zone goes to the one
+  ordered together with the domain. If none (or more than one) was, nothing is created and
+  the Activity Log says `… they have several DNS services (#…) …`. Add the zone by hand in
+  the right service.
 - The token needs `zones:write`, and WHMCS must have loaded the module's hooks (save
   the product's Module Settings once — Step 4)
+
+### Client sees "DNS management is not available …"
+
+- **"… while this service is Suspended"** (or Pending, Terminated): the portal button and
+  the DNS manager work only for an **Active** service (since 1.9.6).
+- **"… to your user account for this service"** or **"Your user account does not have
+  permission to manage DNS for this service"**: the signed-in user is not the account
+  owner and lacks the **Perform Single Sign-On** permission on that account. The owner
+  grants it under **Account → User Management**, or you can under the client's **Users**
+  tab in the admin area.
+
+### Terminate returns "sub-client #N was not deleted because …"
+
+Since 1.9.6 Terminate deletes the sub-client's zones first, because PanelDNS keeps a
+deleted sub-client's zones live otherwise. If listing or deleting a zone fails (a DNS
+server error, or a rate limit on a sub-client with many zones), the sub-client is kept and
+the message names the zone. Run **Terminate** again; zones already deleted are not listed
+again. The grace-period job retries the same way on the next night.
 
 ### Client can't add a zone
 
