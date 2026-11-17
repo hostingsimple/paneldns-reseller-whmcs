@@ -158,7 +158,7 @@ PHP);
         $r = self::exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($script) . ' ' . escapeshellarg($root));
         $this->assertSame(0, $r['code'], "load failed:\n" . $r['out'] . $r['err']);
         $this->assertStringContainsString('LOADED PanelDNS (Reseller', $r['out']);
-        $this->assertStringContainsString('hooks=11', $r['out']);
+        $this->assertStringContainsString('hooks=10', $r['out']); // PAY-02: no invoice hook
     }
 
     private static function normalise(string $path): string

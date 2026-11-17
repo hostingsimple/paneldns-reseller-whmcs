@@ -7,14 +7,25 @@
  * database/API logic is testable in isolation.
  *
  * WHMCS hook variable conventions (verified against developers.whmcs.com):
- *   - AfterRegistrarRegistration / AfterRegistrarTransfer: variables nested
- *     under $vars['params'] (registrar module params). Domain is split into
- *     'sld' + 'tld' (tld includes the leading dot); 'userid' is the client.
- *     Many registrars also expose a convenience 'domainname' = full domain.
+ *   - AfterRegistrarRegistration ("Executes after a successful domain register
+ *     command"): variables nested under $vars['params'] (registrar module params):
+ *     'userid' (the client who owns the domain), 'domainid', 'sld', 'tld'. Many
+ *     registrars also expose a convenience 'domainname' = full domain.
+ *   - DomainTransferCompleted ("Executes when a domain transfer is set to completed
+ *     by the domain sync cron"): TOP LEVEL — 'domainId', 'domain', 'registrar'… No
+ *     user id; the owner is read from tbldomains by id.
+ *   - AfterRegistrarTransfer is NOT used (ZONE-OWN-04, v1.9.5): it "Executes upon
+ *     completion of the registrar module function. Will execute regardless of success
+ *     state" — i.e. when a transfer is submitted, even a failed one, for a domain the
+ *     client may not own.
  *   - DomainDelete: variables at TOP LEVEL — 'userid', 'domainid'. No domain
  *     name is passed, so it is resolved from tbldomains by id.
  *   - AddonActivated / AddonSuspended / AddonTerminated: TOP LEVEL — 'id',
  *     'userid', 'serviceid', 'addonid'. No addon name; resolved from tbladdons.
+ *   - No invoice hook (PAY-02, v1.9.5). onInvoicePaid() and its InvoicePaymentSuccess
+ *     hook (a name WHMCS does not have) were removed: on any payment they re-activated
+ *     every suspended service of the client. WHMCS's own Enable Unsuspension calls
+ *     UnsuspendAccount for services it suspended for non-payment. See hooks.php.
  *
  * Module config options (defined in paneldnsreseller_ConfigOptions) are stored
  * per-product in tblproducts.configoptionN by definition order, NOT in the
@@ -31,6 +42,7 @@
  *   9 Auto-Create Zone on Domain Order    configoption9
  *  10 Auto-Delete Zone on Domain Expiry   configoption10
  *  11 Termination Grace Period (Days)     configoption11
+ *  12 Allow Zones for Domains Not in This Account   configoption12 (ZONE-OWN-02, v1.9.5)
  *
  * MODULE-NAME-01 (v1.9.3): every query filters on tblproducts.servertype IN SERVERTYPES.
  * Up to 1.9.2 they filtered on 'paneldns_reseller', a name no product carried (WHMCS
@@ -63,16 +75,123 @@ class PanelDnsResellerHooks
     public static $apiFactory = null;
 
     /**
+     * WHMCS domain statuses (tbldomains.status) in which the domain is not, or is no
+     * longer, the client's.
+     */
+    const DOMAIN_ENDED_STATUSES = ['Cancelled', 'Fraud', 'Transferred Away', 'Expired'];
+
+    /**
+     * ZONE-OWN-04: AfterRegistrarRegistration — the registrar has just registered the
+     * domain for this client.
+     */
+    public static function onDomainRegistered(array $vars): void
+    {
+        $p = is_array($vars['params'] ?? null) ? $vars['params'] : [];
+        $domain = trim((string) ($p['domainname'] ?? ''));
+        if ($domain === '') {
+            $sld = rtrim(trim((string) ($p['sld'] ?? '')), '.');
+            $tld = ltrim(trim((string) ($p['tld'] ?? '')), '.'); // with or without its dot
+            $domain = ($sld !== '' && $tld !== '') ? $sld . '.' . $tld : '';
+        }
+        self::onDomainEvent((int) ($p['userid'] ?? 0), $domain, 'create');
+    }
+
+    /**
+     * ZONE-OWN-04: DomainTransferCompleted — WHMCS's domain sync cron has seen the
+     * transfer complete. The hook passes no user id; the owner comes from tbldomains.
+     */
+    public static function onDomainTransferCompleted(array $vars): void
+    {
+        $domainId = (int) ($vars['domainId'] ?? $vars['domainid'] ?? 0);
+        if ($domainId <= 0) return;
+
+        try {
+            $row = \WHMCS\Database\Capsule::table('tbldomains')
+                ->where('id', $domainId)
+                ->select(['userid', 'domain'])
+                ->first();
+        } catch (\Throwable $e) {
+            logActivity('PanelDNS domain transfer hook error (' . get_class($e) . ')');
+            return;
+        }
+        if (!$row) return;
+
+        $domain = strtolower(trim((string) $row->domain));
+        $hooked = strtolower(trim((string) ($vars['domain'] ?? '')));
+        if ($hooked !== '' && $hooked !== $domain) return; // not the domain the hook reported
+
+        self::onDomainEvent((int) $row->userid, $domain, 'create', true);
+    }
+
+    /**
+     * ZONE-OWN-01/04: the statuses of this client's tbldomains rows for exactly this
+     * domain (lower-cased; an IDN also matches its Unicode spelling). Throws on a DB
+     * error — callers refuse rather than guess.
+     *
+     * @return string[]
+     */
+    public static function clientDomainStatuses(int $userId, string $domain): array
+    {
+        $domain = strtolower(trim($domain));
+        if ($userId <= 0 || $domain === '') return [];
+
+        $names = [$domain];
+        if (str_contains($domain, 'xn--') && function_exists('idn_to_utf8')) {
+            $u = idn_to_utf8($domain, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
+            if (is_string($u) && $u !== '') $names[] = mb_strtolower($u);
+        }
+        $names = array_values(array_unique($names));
+
+        $rows = \WHMCS\Database\Capsule::table('tbldomains')
+            ->where('userid', $userId)
+            ->whereIn('domain', $names)
+            ->select(['domain', 'status'])
+            ->get();
+
+        $statuses = [];
+        foreach ($rows as $row) {
+            // Exact match here too: MySQL's default collations also equate case and
+            // trailing spaces.
+            if (in_array(mb_strtolower((string) $row->domain), $names, true)) {
+                $statuses[] = (string) $row->status;
+            }
+        }
+        return $statuses;
+    }
+
+    /**
+     * ZONE-OWN-04: the domain is (or has just become) the client's: a tbldomains row of
+     * theirs in a live status. Pending Transfer counts only when the caller is the
+     * transfer-completed hook, which is WHMCS saying the transfer is done.
+     */
+    private static function domainIsTheClients(int $userId, string $domain, bool $transferCompleted): bool
+    {
+        $refused = $transferCompleted
+            ? self::DOMAIN_ENDED_STATUSES
+            : array_merge(self::DOMAIN_ENDED_STATUSES, ['Pending Transfer']);
+        foreach (self::clientDomainStatuses($userId, $domain) as $status) {
+            if (!in_array($status, $refused, true)) return true;
+        }
+        return false;
+    }
+
+    /**
      * DOMAIN-01/02: handle domain create/delete events.
      *
      * Finds the client's active paneldnsreseller service, checks the relevant
      * per-product config option, and creates or deletes the matching DNS zone.
      *
+     * ZONE-OWN-04 (v1.9.5): 'create' first checks that the domain is on this client's
+     * own WHMCS account. Up to 1.9.4 it was also run from AfterRegistrarTransfer, which
+     * fires when a transfer is SUBMITTED (successful or not), so ordering a transfer of
+     * someone else's domain created its zone under the orderer's sub-client.
+     *
      * @param int    $userId WHMCS client id
      * @param string $domain Full domain name (e.g. example.com)
      * @param string $action 'create' or 'delete'
+     * @param bool   $transferCompleted 'create' from DomainTransferCompleted
      */
-    public static function onDomainEvent(int $userId, string $domain, string $action): void
+    public static function onDomainEvent(int $userId, string $domain, string $action, bool $transferCompleted = false): void
     {
         $domain = strtolower(trim($domain));
         if ($userId <= 0 || $domain === '') {
@@ -114,6 +233,12 @@ class PanelDnsResellerHooks
                 return;
             }
             if ($action === 'delete' && !self::isYes($service->auto_delete)) {
+                return;
+            }
+
+            if ($action === 'create' && !self::domainIsTheClients($userId, $domain, $transferCompleted)) {
+                logActivity("PanelDNS: auto-create zone {$domain} skipped for client #{$userId}"
+                    . ' — not a domain on their account (or its transfer has not completed).');
                 return;
             }
 
@@ -450,66 +575,6 @@ class PanelDnsResellerHooks
     public static function graceDeleteSucceeded(array $resp): bool
     {
         return !empty($resp['ok']) || (int) ($resp['status'] ?? 0) === 404;
-    }
-
-    /**
-     * PAY-01: unsuspend all Suspended paneldnsreseller services for a client
-     * when they pay an invoice.
-     *
-     * Deliberately unsuspends regardless of why the service is suspended in WHMCS —
-     * if it was suspended by the operator for a non-payment reason, the next
-     * DailyCronJob drift sync will re-suspend it. Best-effort per service: one
-     * failure does not prevent the others from being processed.
-     *
-     * @param int $userId WHMCS client id from the InvoicePaymentSuccess hook
-     */
-    public static function onInvoicePaid(int $userId): void
-    {
-        if ($userId <= 0) return;
-
-        try {
-            $services = \WHMCS\Database\Capsule::table('tblhosting')
-                ->join('tblservers',  'tblhosting.server',    '=', 'tblservers.id')
-                ->join('tblproducts', 'tblhosting.packageid', '=', 'tblproducts.id')
-                ->where('tblhosting.userid', $userId)
-                ->where('tblhosting.domainstatus', 'Suspended')
-                ->whereIn('tblproducts.servertype', self::SERVERTYPES)
-                ->select([
-                    'tblhosting.id as service_id',
-                    'tblhosting.dedicatedip as sub_client_id',
-                    'tblservers.hostname as server_hostname',
-                    'tblservers.accesshash as server_key',
-                    'tblservers.secure as server_secure',
-                    'tblservers.port as server_port',
-                ])
-                ->get()->all();
-        } catch (\Throwable $e) {
-            logActivity('PanelDNS InvoicePaid: DB query failed (' . get_class($e) . ')');
-            return;
-        }
-
-        foreach ($services as $svc) {
-            $subClientId = (int) $svc->sub_client_id;
-            if ($subClientId <= 0) continue;
-
-            try {
-                $api  = self::apiForServer($svc);
-                $resp = $api->patchSubClient($subClientId, ['status' => 'active']);
-                if ($resp['ok']) {
-                    // Mirror the status change in WHMCS so the service shows Active.
-                    \WHMCS\Database\Capsule::table('tblhosting')
-                        ->where('id', $svc->service_id)
-                        ->update(['domainstatus' => 'Active']);
-                    logActivity("PanelDNS: unsuspended sub-client {$subClientId} (service #{$svc->service_id}) on invoice payment.");
-                } else {
-                    logActivity('PanelDNS InvoicePaid: unsuspend failed for sub-client '
-                        . $subClientId . ' — ' . substr((string) ($resp['error'] ?? 'unknown'), 0, 200));
-                }
-            } catch (\Throwable $e) {
-                logActivity('PanelDNS InvoicePaid: error for service #' . $svc->service_id
-                    . ' (' . get_class($e) . ')');
-            }
-        }
     }
 
     /**

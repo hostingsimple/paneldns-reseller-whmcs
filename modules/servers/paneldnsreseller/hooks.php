@@ -47,19 +47,23 @@ add_hook('DailyCronJob', 1, function () {
 });
 
 /**
- * DOMAIN-01: auto-create a DNS zone when a domain is registered or transferred
- * via a registrar module. Both hooks pass the registrar module params nested
- * under $vars['params'] — the domain is sld+tld (tld includes the dot), and
- * many registrars also expose a convenience 'domainname'. Gated per-product by
- * "Auto-Create Zone on Domain Order".
+ * DOMAIN-01: auto-create a DNS zone when a domain is registered, or when its transfer
+ * has COMPLETED, for a client with an active service of this module. Gated per-product
+ * by "Auto-Create Zone on Domain Order", and only for a domain on that client's own
+ * WHMCS account (ZONE-OWN-04).
+ *
+ * ZONE-OWN-04 (v1.9.5): AfterRegistrarTransfer is no longer hooked. WHMCS runs it when
+ * the transfer command has been sent to the registrar, whether or not it succeeded, so
+ * ordering a transfer of someone else's domain created that domain's zone under the
+ * orderer's sub-client. DomainTransferCompleted runs when WHMCS's domain sync cron
+ * marks the transfer completed. https://developers.whmcs.com/hooks-reference/domain/
  */
-$paneldnsDomainCreate = function (array $vars) {
-    $p      = $vars['params'] ?? [];
-    $domain = $p['domainname'] ?? (($p['sld'] ?? '') . ($p['tld'] ?? ''));
-    PanelDnsResellerHooks::onDomainEvent((int) ($p['userid'] ?? 0), (string) $domain, 'create');
-};
-add_hook('AfterRegistrarRegistration', 1, $paneldnsDomainCreate);
-add_hook('AfterRegistrarTransfer', 1, $paneldnsDomainCreate);
+add_hook('AfterRegistrarRegistration', 1, function (array $vars) {
+    PanelDnsResellerHooks::onDomainRegistered($vars);
+});
+add_hook('DomainTransferCompleted', 1, function (array $vars) {
+    PanelDnsResellerHooks::onDomainTransferCompleted($vars);
+});
 
 /**
  * DOMAIN-02: optionally delete the DNS zone when a domain is deleted. The
@@ -146,22 +150,19 @@ add_hook('DailyCronJob', 1, function () {
 });
 
 /**
- * PAY-01: auto-unsuspend a sub-client when a past-due invoice is paid.
+ * PAY-02 (v1.9.5): no invoice-payment hook. Unsuspension on payment is WHMCS's job.
  *
- * Without this hook, a client who pays their overdue invoice stays suspended
- * until the next DailyCronJob drift sync (up to 24 hours). This hook fires
- * immediately on payment and unsuspends right away.
+ * Up to 1.9.4 an `InvoicePaymentSuccess` hook (PAY-01) set every Suspended service of
+ * this module of the client to active in PanelDNS and Active in WHMCS on ANY payment:
+ * any invoice (an Add Funds one too), any suspension reason (abuse, a manual hold),
+ * other invoices still overdue. WHMCS has no hook of that name, so it should never have
+ * run; renamed to InvoicePaid it would have.
+ * https://developers.whmcs.com/hooks-reference/invoices-and-quotes/
  *
- * WHMCS InvoicePaymentSuccess passes 'invoiceid' and 'userid' at the top level.
- * The hook checks every Suspended paneldnsreseller service for that client,
- * so it handles the edge case of a client with multiple DNS products.
+ * WHMCS already does this correctly: when an overdue invoice is paid and Automation
+ * Settings → Enable Unsuspension is on, it unsuspends a service it suspended for
+ * non-payment ("Overdue on Payment") by calling paneldnsreseller_UnsuspendAccount, and
+ * leaves a custom-reason suspension alone. https://docs.whmcs.com/billing-and-invoicing/billing-logic
+ * Do not add an invoice hook (InvoicePaid, InvoicePaidPreEmail, AddInvoicePayment) that
+ * unsuspends or writes tblhosting.domainstatus.
  */
-add_hook('InvoicePaymentSuccess', 1, function (array $vars) {
-    try {
-        PanelDnsResellerHooks::onInvoicePaid((int) ($vars['userid'] ?? 0));
-    } catch (\Throwable $e) {
-        if (function_exists('logActivity')) {
-            logActivity('PanelDNS InvoicePaymentSuccess hook crashed: ' . get_class($e));
-        }
-    }
-});

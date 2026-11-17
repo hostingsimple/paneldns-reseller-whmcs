@@ -15,6 +15,7 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 | Client orders product | Sub-client created in PanelDNS, welcome email sent with portal login |
 | Admin suspends service | Sub-client suspended in PanelDNS |
 | Admin unsuspends | Sub-client re-activated |
+| Client pays an overdue invoice | WHMCS unsuspends a service it suspended for non-payment (Automation Settings → Enable Unsuspension), which re-activates the sub-client. A suspension with any other reason stays |
 | Admin terminates | Sub-client deleted (or suspended for a configurable grace period) |
 | Admin changes package | Zone and record limits updated |
 | Client updates profile | Name synced to PanelDNS automatically (the email stays fixed — it is the sub-client's sign-in identity) |
@@ -31,8 +32,12 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
   (PanelDNS's limit per import)
 - **Nameserver card** — the client area always shows the nameservers clients need to
   set at their registrar, so they never need to dig through old welcome emails
-- **Auto-create DNS zones** — when a domain is registered or transferred through
-  WHMCS, a matching DNS zone is created automatically in PanelDNS
+- **Auto-create DNS zones** — when a domain on the client's account is registered
+  through WHMCS, or its transfer completes, a matching DNS zone is created automatically
+  in PanelDNS
+- **Zones only for the client's own domains** — clients can add zones only for domains
+  that are Active on their own WHMCS account, unless the product allows others; even
+  then, never a name that overlaps another customer's zone (v1.9.5)
 - **Addon products for extra zones** — sell "PanelDNS +10 Zones" addons; activation
   raises the sub-client's zone limit, suspension lowers it back
 - **Live usage panel** — the admin service detail page shows zones/records used vs
@@ -113,9 +118,10 @@ are available:
 | Send Welcome Email | Yes | Email the client a portal login link and nameserver details on provisioning. |
 | NS1–NS4 Hostname | **(blank)** | Override the nameservers shown in the welcome email and client area for this product (white-label branding). Leave blank to use the org's default nameservers. |
 | SOA Email | **(blank)** | Override the SOA contact email shown in the welcome email. |
-| Auto-Create Zone on Domain Order | Yes | Automatically create a DNS zone when the client registers or transfers a domain. |
+| Auto-Create Zone on Domain Order | Yes | Automatically create a DNS zone when a domain on the client's account is registered, or its transfer completes (`DomainTransferCompleted`). A transfer that has only been submitted creates nothing. |
 | Auto-Delete Zone on Domain Expiry | No | Remove the DNS zone when a domain is deleted. Disabled by default. |
 | Termination Grace Period (Days) | 0 | Days to wait before permanently deleting the sub-client after termination. 0 = delete immediately. Sub-client is suspended during the grace period and hard-deleted nightly once it expires. |
+| Allow Zones for Domains Not in This Account | **No** | `configoption12`, added in 1.9.5. **Off:** a client can add a zone only for a domain that is Active on their own WHMCS account. **On:** any name, except one that equals, contains or sits inside another customer's zone (or one of your org's own zones). Turn it on only if your customers host domains registered elsewhere. A zone for a domain the client does not own takes over that domain's DNS once it points at your nameservers. |
 
 ### Per-order zone limits with WHMCS Configurable Options
 
@@ -151,11 +157,11 @@ product-level Zone Limit only if it is not set.
 ```
 modules/servers/paneldnsreseller/      ← what the release ZIP installs
 ├── paneldnsreseller.php               WHMCS module functions (paneldnsreseller_*)
-├── hooks.php                          cron, domain, addon, client-edit, payment hooks
+├── hooks.php                          cron, domain, addon and client-edit hooks
 ├── templates/client/*.tpl             client-area pages (?customAction=zones, records, …)
 └── lib/
     ├── PanelDnsResellerService.php    lifecycle, SSO, admin tab, client area
-    ├── PanelDnsResellerHooks.php      hook logic (domain/addon/grace/payment)
+    ├── PanelDnsResellerHooks.php      hook logic (domain/addon/grace/client edit)
     ├── PanelDnsResellerMigration.php  pre-1.9.3 module-name migration
     ├── EmbeddedDnsManager.php         in-WHMCS zone + record manager
     └── PanelDnsApi.php, LicenceCheck.php, DriftSync.php, WelcomeMail.php
@@ -190,6 +196,24 @@ build.php                              builds dist/paneldns-reseller-whmcs-X.Y.Z
   linking them, and no client-fillable field (such as a product custom field) is read as
   the sub-client id. Linking an existing sub-client is always a per-service admin step.
 - The nightly grace-period delete skips a sub-client that a live service now uses.
+- **Zones only for the client's own domains (v1.9.5).** All your customers share your
+  nameservers, which answer from the most specific zone they hold. So a zone for someone
+  else's name, such as `shop.victim.com` or `victim.com` before its owner adds it, takes
+  over that name's DNS. **Add Zone** accepts only a domain that is Active on the client's
+  own WHMCS account. The service's Domain field does not count, because the client types
+  it on the order form. With **Allow Zones for Domains Not in This Account** on, other
+  names are allowed, except one that equals, contains or sits inside a zone that is not
+  this client's. The check follows every page of the zone list and refuses the name if a
+  lookup fails. Auto-create runs only for a domain on the client's account, on
+  registration or a *completed* transfer. It never runs when a transfer is only submitted.
+  When PanelDNS refuses a name as taken, the client sees only "This zone name is
+  unavailable." and the detail goes to the Activity Log, so customers cannot find out which
+  names other customers host.
+- **A payment never lifts a suspension through the module (v1.9.5).** The module has no
+  invoice hook. Up to 1.9.4 it registered one (`InvoicePaymentSuccess`, a name WHMCS does
+  not have) that re-activated every suspended service of a client on any payment, abuse
+  suspensions included. Unsuspension on payment is left to WHMCS's own Enable Unsuspension,
+  which calls the module's Unsuspend only for services WHMCS suspended for non-payment.
 
 ---
 

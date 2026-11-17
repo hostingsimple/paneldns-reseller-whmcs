@@ -4,6 +4,101 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.9.5] — 2026-11-18
+
+### Security — a customer can only add zones for their own domains
+
+All of a reseller's customers share the reseller's nameservers, and those nameservers answer
+from the most specific zone they hold. Up to 1.9.4 any customer could create a zone for
+any name that passed the syntax check. That included `shop.victim.com` under another
+customer's zone, and `victim.com` itself before its owner had added it, so the customer
+could take over another customer's names: their mail, their TLS certificates, or a phishing
+copy of their site. PanelDNS only refused an exact duplicate in the org.
+
+- **Client-area zone create (ZONE-OWN-01, critical).** **Add Zone** now accepts a name only
+  when it is a domain that is **Active** on the customer's own WHMCS account (Domains,
+  exact name, any letter case). A domain whose transfer is still pending is refused until
+  WHMCS marks the transfer complete. The service's own Domain field does not count: the
+  customer types it on the order form ("use my existing domain") and WHMCS never checks it.
+- **New product option: Allow Zones for Domains Not in This Account (ZONE-OWN-02).** This is
+  `configoption12`, **off by default**, and existing products are off after the upgrade. Tick
+  it on products whose customers host domains registered elsewhere. When it is on, any name
+  is allowed unless it equals, contains or sits inside a zone that belongs to someone else:
+  another sub-client, or the reseller's own org-level zones. The module checks this against
+  the reseller's zone list, following every page, in at most three listing calls whatever
+  the depth of the name. If a lookup fails, the name is refused ("try again in a few
+  minutes"). With the option on, a customer can still add a zone for a domain nobody has
+  added yet. That zone takes over the domain's DNS once the domain points at your
+  nameservers, so leave the option off unless you need it.
+- **No leak of other customers' zone names (ZONE-OWN-03).** A 409 from PanelDNS ("Zone already
+  exists."), or a 422 because the name is taken or overlaps another zone (a `name` field
+  error, an "already exists" or "unavailable" message), now shows the customer only
+  **"This zone name is unavailable."** Before, that 409 told a customer which names other
+  customers host. Every refusal is written to the WHMCS **Activity Log** with the reason and
+  PanelDNS's own message, for the admin. Other errors are shown as before, such as
+  "Sub-client zone limit reached".
+- **Auto-create on domain transfer (ZONE-OWN-04).** Auto-create used the
+  `AfterRegistrarTransfer` hook. WHMCS documents it as running when the registrar function
+  finishes, "regardless of success state": that is when the transfer is *submitted*,
+  even if it then fails. Ordering a transfer of someone else's domain therefore created
+  that domain's zone. The module now uses `DomainTransferCompleted`, which WHMCS runs when
+  its domain sync cron marks the transfer completed
+  ([WHMCS hook reference](https://developers.whmcs.com/hooks-reference/domain/)).
+  Registration still uses `AfterRegistrarRegistration`, which runs only after a
+  successful register command. Both now also check that the domain is on that client's
+  account in a live status (not Cancelled, Fraud, Transferred Away or Expired) before
+  creating the zone. A skipped auto-create is logged.
+
+PanelDNS itself is gaining the same overlap refusal across tenants and sub-clients. The
+module's check does not depend on that change: it applies to any PanelDNS version this
+module supports.
+
+### Security — paying an invoice no longer re-activates suspended services (PAY-02)
+
+Since 1.5.0, `hooks.php` registered an `InvoicePaymentSuccess` hook (PAY-01). On any
+payment by a client, it set every Suspended service of this module for that client to
+active in PanelDNS and wrote Active into the WHMCS service. It did not check which invoice
+was paid (an Add Funds invoice counted), why the service was suspended (abuse, a manual
+hold), or whether other invoices were still overdue. A customer suspended for abuse would
+get DNS editing and portal sign-in back by paying any small invoice.
+
+WHMCS has no hook called `InvoicePaymentSuccess`. Its
+[hook reference](https://developers.whmcs.com/hooks-reference/invoices-and-quotes/) has
+`InvoicePaid`, `InvoicePaidPreEmail` and `AddInvoicePayment`, which pass the invoice id
+and not the client id. So the hook should never have run, and up to 1.9.2 it could not
+have acted anyway (MODULE-NAME-01). It is **removed, not renamed**, because WHMCS already
+does this job correctly:
+
+- With **Setup → Automation Settings → Enable Unsuspension** on, paying an overdue invoice
+  unsuspends a service that WHMCS suspended for non-payment (reason "Overdue on Payment").
+  WHMCS does this at payment time, through the module's **UnsuspendAccount**, which
+  re-activates the sub-client. A service suspended by hand with a custom reason is not
+  unsuspended
+  ([Billing Logic](https://docs.whmcs.com/billing-and-invoicing/billing-logic),
+  [Automation Settings](https://docs.whmcs.com/system/automation/automation-settings)).
+- `InvoicePaid` runs after those automation tasks, so a module hook there could only
+  repeat or overrule what WHMCS decided.
+
+The 1.5.0 entry said a client who paid would otherwise stay suspended until the nightly
+drift sync. That was not so: WHMCS unsuspends at payment, and the drift sync never
+re-activates a sub-client in PanelDNS.
+
+### Upgrade notes
+
+- After the upgrade, a customer can no longer add a zone for a domain that is not on their
+  WHMCS account. If your customers host domains registered elsewhere, tick **Allow Zones
+  for Domains Not in This Account** on those products. It is the last option on the
+  product's Module Settings tab.
+- Zones that already exist are not touched. To find squatted names from before 1.9.5, look
+  in PanelDNS for zones whose name is a subdomain of a zone held by a different sub-client,
+  and for zones whose domain is not on that customer's WHMCS account.
+- To have DNS services unsuspended when their overdue invoice is paid, turn on **Enable
+  Unsuspension** in **Setup → Automation Settings**, as for any other product. Give every
+  suspension that is not about billing (abuse, ID checks) your own reason, so no payment
+  lifts it.
+
+---
+
 ## [1.9.4] — 2026-11-18
 
 ### Security — no account linking by email or client-supplied data
