@@ -223,10 +223,11 @@ final class PanelDnsResellerHooksTest extends TestCase
         });
         $api->on('DELETE', '/api/v1/zones/52', FakeApi::json(200, ['ok' => true, 'data' => null]));
         PanelDnsResellerHooks::$apiFactory = fn () => $api;
-        Capsule::$handler = fn (FakeQuery $q, string $op) => $op === 'first' ? (object) [
-            'service_id' => 1, 'sub_client_id' => '42', 'server_hostname' => 'paneldns.test', 'server_key' => 'k',
+        // DOMAIN-SVC-01 (v1.9.6): the hook lists the client's services (one here).
+        Capsule::$handler = fn (FakeQuery $q, string $op) => $op === 'get' && $q->baseTable() === 'tblhosting' ? [(object) [
+            'service_id' => 1, 'order_id' => 0, 'sub_client_id' => '42', 'server_hostname' => 'paneldns.test', 'server_key' => 'k',
             'server_secure' => 1, 'server_port' => 443, 'auto_create' => 'on', 'auto_delete' => 'on',
-        ] : null;
+        ]] : null;
 
         PanelDnsResellerHooks::onDomainEvent(7, 'Example.com', 'delete');
 

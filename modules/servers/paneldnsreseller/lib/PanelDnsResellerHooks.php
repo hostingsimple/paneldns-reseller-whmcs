@@ -137,12 +137,7 @@ class PanelDnsResellerHooks
         $domain = strtolower(trim($domain));
         if ($userId <= 0 || $domain === '') return [];
 
-        $names = [$domain];
-        if (str_contains($domain, 'xn--') && function_exists('idn_to_utf8')) {
-            $u = idn_to_utf8($domain, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
-            if (is_string($u) && $u !== '') $names[] = mb_strtolower($u);
-        }
-        $names = array_values(array_unique($names));
+        $names = self::domainNames($domain);
 
         $rows = \WHMCS\Database\Capsule::table('tbldomains')
             ->where('userid', $userId)
@@ -201,9 +196,9 @@ class PanelDnsResellerHooks
         }
 
         try {
-            // Find an active paneldnsreseller service for this client, pulling
-            // the two domain-automation config options from the product row.
-            $service = \WHMCS\Database\Capsule::table('tblhosting')
+            // The client's active paneldnsreseller services, with the two
+            // domain-automation config options from the product row.
+            $services = \WHMCS\Database\Capsule::table('tblhosting')
                 ->join('tblservers', 'tblhosting.server', '=', 'tblservers.id')
                 ->join('tblproducts', 'tblhosting.packageid', '=', 'tblproducts.id')
                 ->where('tblhosting.userid', $userId)
@@ -211,6 +206,7 @@ class PanelDnsResellerHooks
                 ->whereIn('tblproducts.servertype', self::SERVERTYPES)
                 ->select([
                     'tblhosting.id as service_id',
+                    'tblhosting.orderid as order_id',
                     'tblhosting.dedicatedip as sub_client_id',
                     'tblservers.hostname as server_hostname',
                     'tblservers.accesshash as server_key',
@@ -219,24 +215,14 @@ class PanelDnsResellerHooks
                     'tblproducts.configoption9 as auto_create',
                     'tblproducts.configoption10 as auto_delete',
                 ])
-                ->first();
+                ->orderBy('tblhosting.id')
+                ->get();
 
+            $service = self::serviceForDomain($services->all(), $userId, $domain, $action);
             if (!$service) {
                 return;
             }
-
             $subClientId = (int) $service->sub_client_id;
-            if ($subClientId <= 0) {
-                return;
-            }
-
-            // yesno module config options store 'on' when ticked ('' when not).
-            if ($action === 'create' && !self::isYes($service->auto_create)) {
-                return;
-            }
-            if ($action === 'delete' && !self::isYes($service->auto_delete)) {
-                return;
-            }
 
             if ($action === 'create' && !self::domainIsTheClients($userId, $domain, $transferCompleted)) {
                 logActivity("PanelDNS: auto-create zone {$domain} skipped for client #{$userId}"
@@ -274,6 +260,65 @@ class PanelDnsResellerHooks
             // SEC-L06: log class only — exception messages may contain PII or SQL fragments.
             logActivity('PanelDNS domain hook error (' . get_class($e) . ')');
         }
+    }
+
+    /**
+     * DOMAIN-SVC-01 (v1.9.6): which of the client's active DNS services a domain event
+     * acts on, the same rule for create and delete:
+     *
+     *   - only services with a sub-client and the relevant option ticked (Auto-Create /
+     *     Auto-Delete Zone) are candidates;
+     *   - one candidate: that one;
+     *   - several: the one ordered together with the domain (tblhosting.orderid =
+     *     tbldomains.orderid), when exactly one was;
+     *   - otherwise none: the event is skipped and logged for the admin.
+     *
+     * Up to 1.9.5 the query took ->first() with no ordering and no server filter, so a
+     * client with DNS services on two PanelDNS servers or reseller orgs got the zone in
+     * whichever row MySQL returned, and auto-delete could look in the wrong one.
+     *
+     * @param array<int,object> $services the client's active services of this module
+     */
+    private static function serviceForDomain(array $services, int $userId, string $domain, string $action): ?object
+    {
+        $option = $action === 'create' ? 'auto_create' : 'auto_delete';
+        // yesno module config options store 'on' when ticked ('' when not).
+        $candidates = array_values(array_filter(
+            $services,
+            fn (object $s) => (int) ($s->sub_client_id ?? 0) > 0 && self::isYes($s->{$option} ?? '')
+        ));
+        if (count($candidates) <= 1) {
+            return $candidates[0] ?? null;
+        }
+
+        $orderId = (int) \WHMCS\Database\Capsule::table('tbldomains')
+            ->where('userid', $userId)
+            ->whereIn('domain', self::domainNames($domain))
+            ->orderBy('id', 'desc')
+            ->value('orderid');
+        if ($orderId > 0) {
+            $sameOrder = array_values(array_filter($candidates, fn (object $s) => (int) ($s->order_id ?? 0) === $orderId));
+            if (count($sameOrder) === 1) {
+                return $sameOrder[0];
+            }
+        }
+
+        $ids = implode(', ', array_map(fn (object $s) => '#' . (int) $s->service_id, $candidates));
+        logActivity("PanelDNS: auto-{$action} zone {$domain} skipped for client #{$userId}: they have several DNS"
+            . " services ({$ids}) and none was ordered with this domain. Manage the zone in the right service by hand.");
+        return null;
+    }
+
+    /** The lower-cased spellings of a domain to match in tbldomains (an IDN also in Unicode). */
+    private static function domainNames(string $domain): array
+    {
+        $domain = strtolower(trim($domain));
+        $names = [$domain];
+        if (str_contains($domain, 'xn--') && function_exists('idn_to_utf8')) {
+            $u = idn_to_utf8($domain, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
+            if (is_string($u) && $u !== '') $names[] = mb_strtolower($u);
+        }
+        return array_values(array_unique($names));
     }
 
     /**
