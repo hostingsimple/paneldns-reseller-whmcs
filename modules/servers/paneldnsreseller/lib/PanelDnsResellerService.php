@@ -99,13 +99,26 @@ class PanelDnsResellerService
         );
     }
 
+    /**
+     * The PanelDNS sub-client this service is linked to: tblhosting.dedicatedip only.
+     *
+     * NO-EMAIL-LINK-03 (v1.9.4): up to 1.9.3 a product custom field named
+     * `paneldns_sub_client_id` was read FIRST. A product custom field that is not
+     * Admin Only can be filled in by the client on the order form, so a client could
+     * name any sub-client id in the org and Create, SSO, Suspend and Terminate would act
+     * on it — account takeover by id. The module never wrote that field and no docs
+     * mention it. Dedicated IP is admin-only in WHMCS and is where the module stores
+     * the id PanelDNS issued for this service.
+     */
     private function subClientId(): ?int
     {
-        $v = $this->params['customfields']['paneldns_sub_client_id'] ?? null;
-        if (!$v && !empty($this->params['model']?->dedicatedip)) {
-            $v = $this->params['model']->dedicatedip;
+        $v = $this->params['model']?->dedicatedip ?? null;
+        $v = is_scalar($v) ? trim((string) $v) : '';
+        if ($v === '' || !ctype_digit($v)) {
+            return null;
         }
-        return $v ? (int) $v : null;
+        $id = (int) $v;
+        return $id > 0 ? $id : null;
     }
 
     private function setSubClientId(int $id): void
@@ -335,8 +348,9 @@ class PanelDnsResellerService
         if (!$resp['ok']) {
             // DUP-EMAIL-01: PanelDNS requires the email to be unique per org; a second
             // service for the same client gets 422 {errors: {email: ["… already been taken."]}}.
+            // NO-EMAIL-LINK-02 (v1.9.4): this always fails provisioning — it never links.
             if ((int) $resp['status'] === 422 && isset($resp['errors']['email']) && $payload['email'] !== '') {
-                return $this->handleDuplicateEmail($payload['email'], (string) $resp['error'], $limits);
+                return $this->handleDuplicateEmail($payload['email'], (string) $resp['error']);
             }
             return $resp['error'] ?: 'CreateSubClient failed.';
         }
@@ -362,18 +376,19 @@ class PanelDnsResellerService
     }
 
     /**
-     * DUP-EMAIL-01: CreateAccount got "email already taken". Decide whether the existing
-     * sub-client may be linked to this service.
+     * DUP-EMAIL-01: CreateAccount got "email already taken". Explain it to the admin.
      *
-     * Ownership rule: the email alone never proves ownership (WHMCS does not verify
-     * client email addresses), so an existing sub-client is linked automatically only
-     * when it previously belonged to a terminated service of THIS SAME WHMCS client —
-     * the re-order-after-cancellation case. Everything else returns a clear message and
-     * links nothing: a sub-client in use by another live service (one sub-client per
-     * email per org), one tied to another client, or one no service is linked to (the
-     * admin can link it by hand after checking).
+     * NO-EMAIL-LINK-02 (v1.9.4): this never links, re-activates or otherwise adopts the
+     * existing sub-client — it only returns a message, and CreateAccount fails. WHMCS
+     * does not verify client email addresses, so an email match proves nothing about
+     * who owns the sub-client. Up to 1.9.3 a match was linked automatically when the
+     * sub-client's id sat on a terminated service of the same WHMCS client; that id
+     * could itself have been linked by email (Bulk Sync, NO-EMAIL-LINK-01), so a
+     * mis-link the admin had cancelled came straight back on the next order. The
+     * lookup below only finds the candidate so the message can name it; linking is a
+     * per-service admin step (enter the id in Dedicated IP and run Create).
      */
-    private function handleDuplicateEmail(string $email, string $originalError, array $limits): string
+    private function handleDuplicateEmail(string $email, string $originalError): string
     {
         $found = $this->api->findSubClientByEmail($email);
         if (!$found['ok']) {
@@ -411,36 +426,8 @@ class PanelDnsResellerService
             ?? $this->params['clientsdetails']['userid']
             ?? $this->params['clientsdetails']['id']
             ?? 0);
-        $decision = self::duplicateEmailDecision($links, $userId);
 
-        if ($decision['action'] !== 'link') {
-            return self::duplicateEmailMessage($decision, $scId);
-        }
-
-        $resp = $this->api->patchSubClient($scId, ['status' => 'active'] + $limits);
-        if (!$resp['ok']) {
-            return "Re-linking PanelDNS sub-client #{$scId} failed: " . ($resp['error'] ?? 'unknown error');
-        }
-
-        $this->setSubClientId($scId);
-
-        // The old, terminated service may still carry a grace-period marker; the nightly
-        // cron would then delete the sub-client this service now uses.
-        foreach ($decision['clear_grace'] as $oldServiceId => $notes) {
-            try {
-                \WHMCS\Database\Capsule::table('tblhosting')
-                    ->where('id', (int) $oldServiceId)
-                    ->update(['notes' => PanelDnsResellerHooks::stripGraceMarker((string) $notes)]);
-            } catch (\Throwable $e) { /* best-effort */ }
-        }
-
-        if (function_exists('logActivity')) {
-            logActivity("PanelDNS: linked existing sub-client {$scId} to service #" . (int) ($this->params['serviceid'] ?? 0)
-                . ' (same client, previous service terminated).');
-        }
-
-        $this->afterProvision($scId);
-        return 'success';
+        return self::duplicateEmailMessage(self::duplicateEmailDecision($links, $userId), $scId);
     }
 
     /**
@@ -466,61 +453,59 @@ class PanelDnsResellerService
     }
 
     /**
-     * Pure decision for DUP-EMAIL-01 — see handleDuplicateEmail().
+     * Pure classification for DUP-EMAIL-01 — which message handleDuplicateEmail() shows.
+     * NO-EMAIL-LINK-02 (v1.9.4): only a reason; nothing here can lead to a link.
      *
      * @param array<int,object|array> $links  other services linked to the sub-client
-     * @return array{action:string, reason:string, service_id:?int, clear_grace:array<int,string>}
+     * @return array{reason:string, service_id:?int}
      * @internal public for unit tests.
      */
     public static function duplicateEmailDecision(array $links, int $currentUserId): array
     {
         $ended = ['Terminated', 'Cancelled', 'Fraud'];
-        $clearGrace = [];
+        $sameClient = fn (object $l): bool => $currentUserId > 0 && (int) $l->userid === $currentUserId;
 
         foreach ($links as $l) {
             $l = (object) $l;
             if (!in_array((string) $l->domainstatus, $ended, true)) {
                 return [
-                    'action' => 'refuse',
-                    'reason' => (int) $l->userid === $currentUserId && $currentUserId > 0 ? 'in_use_same_client' : 'in_use_other_client',
+                    'reason'     => $sameClient($l) ? 'in_use_same_client' : 'in_use_other_client',
                     'service_id' => (int) $l->id,
-                    'clear_grace' => [],
                 ];
             }
         }
         foreach ($links as $l) {
             $l = (object) $l;
-            if ($currentUserId <= 0 || (int) $l->userid !== $currentUserId) {
-                return ['action' => 'refuse', 'reason' => 'other_client', 'service_id' => (int) $l->id, 'clear_grace' => []];
-            }
-            if (PanelDnsResellerHooks::graceDeadline((string) ($l->notes ?? '')) !== null) {
-                $clearGrace[(int) $l->id] = (string) $l->notes;
+            if (!$sameClient($l)) {
+                return ['reason' => 'other_client', 'service_id' => (int) $l->id];
             }
         }
 
         if ($links === []) {
-            return ['action' => 'refuse', 'reason' => 'unlinked', 'service_id' => null, 'clear_grace' => []];
+            return ['reason' => 'unlinked', 'service_id' => null];
         }
         $first = (object) reset($links);
-        return ['action' => 'link', 'reason' => 'same_client_terminated', 'service_id' => (int) $first->id, 'clear_grace' => $clearGrace];
+        return ['reason' => 'same_client_terminated', 'service_id' => (int) $first->id];
     }
 
     /** @internal public for unit tests. */
     public static function duplicateEmailMessage(array $decision, int $subClientId): string
     {
         $svc = (int) ($decision['service_id'] ?? 0);
-        $manual = "If this client owns it, enter {$subClientId} in this service's Dedicated IP field and run Create again.";
+        $notLinked = 'It was not linked automatically, because WHMCS does not verify client email addresses and a matching email does not prove this client owns it.';
+        $manual = "If you have confirmed this client owns it, enter {$subClientId} in this service's Dedicated IP field and run Create again.";
         return match ($decision['reason']) {
             'in_use_same_client' => "This client already has a PanelDNS account (sub-client #{$subClientId}) on service #{$svc}. "
                 . 'PanelDNS allows one sub-client per email address in an organisation, so this second service cannot get its own. '
                 . "Upgrade service #{$svc} instead, or cancel this order.",
             'in_use_other_client' => "PanelDNS sub-client #{$subClientId} has this email and is linked to service #{$svc} of another WHMCS client. "
                 . 'It was not linked. Resolve the duplicate client email in WHMCS first.',
+            'same_client_terminated' => "PanelDNS sub-client #{$subClientId} has this email and was used by this client's terminated service #{$svc}. "
+                . $notLinked . ' ' . $manual,
             'other_client' => "PanelDNS sub-client #{$subClientId} has this email but was last used by service #{$svc} of another WHMCS client. "
-                . 'It was not linked automatically. ' . $manual,
+                . $notLinked . ' ' . $manual,
             default => "PanelDNS already has a sub-client with this email (#{$subClientId}) and no WHMCS service is linked to it. "
-                . 'It was not linked automatically, because a matching email does not prove this client owns it. '
-                . $manual . ' Or use Bulk Sync Sub-clients on the server.',
+                . $notLinked . ' ' . $manual,
         };
     }
 
@@ -773,12 +758,17 @@ class PanelDnsResellerService
      *
      *   1. Already has dedicatedip set → skip (already provisioned; no API call).
      *   2. No dedicatedip → look the client's email up in PanelDNS (exact match, all
-     *      result pages). If found and no other service is linked to it → store the
-     *      existing sub-client ID in dedicatedip (link). If found but another live
-     *      service already uses it → report and skip. If not found → create, store ID.
+     *      result pages). If found → report it for review and leave the service alone.
+     *      If not found → create a sub-client and store the id PanelDNS returns.
      *
-     * Bulk sync is an admin action on existing services, so — unlike CreateAccount —
-     * it links an unlinked sub-client by email (the admin is vouching for the match).
+     * NO-EMAIL-LINK-01 (v1.9.4): an email match is NEVER linked. Up to 1.9.3 a match
+     * that no other live service used was written into dedicatedip, so one click
+     * linked every unlinked service to whatever sub-client shared its client's email.
+     * WHMCS does not verify client emails: a client who set their email to someone
+     * else's became that person in PanelDNS (Login to PanelDNS, the welcome-email SSO
+     * link, Terminate). A match is now listed under "Needs review" with the service and
+     * sub-client ids; linking is a per-service admin step (enter the id in Dedicated IP
+     * and run Create), after the admin has confirmed who owns the sub-client.
      *
      * Welcome emails are NOT sent during bulk sync — clients are provisioned
      * silently. The reseller can trigger one per service with Resend Welcome Email.
@@ -787,7 +777,8 @@ class PanelDnsResellerService
      * Re-run to continue if the cap is hit. Stops early on a PanelDNS rate limit.
      *
      * @param array $params  WHMCS server params (serverhostname, serveraccesshash, …)
-     * @return string  Summary line: "Created: N | Linked: N | Skipped: N [| Errors: …]"
+     * @return string  Summary line: "Created: N | Needs review (not linked): N | Skipped: N
+     *                 [| Review: …] [| Errors: …]"
      */
     public static function bulkSyncForServer(array $params): string
     {
@@ -845,8 +836,8 @@ class PanelDnsResellerService
 
         $cap      = 200; // BULK-03: hard cap — re-run to process remainder
         $created  = 0;
-        $linked   = 0;
         $skipped  = 0;
+        $review   = []; // NO-EMAIL-LINK-01: email matches, reported and never linked
         $errors   = [];
         $processed = 0;
 
@@ -882,33 +873,10 @@ class PanelDnsResellerService
             $existing = $search['sub_client'];
 
             if ($existing !== null) {
-                // BULK-04: link — sub-client exists; just store the ID.
+                // BULK-04 / NO-EMAIL-LINK-01: a sub-client already has this email. Report
+                // it; never store its id on the service — the email proves nothing.
                 $existingId = (int) ($existing['id'] ?? 0);
-                if ($existingId <= 0) {
-                    $errors[] = "Service #{$svc->serviceid}: found sub-client but id is missing.";
-                    continue;
-                }
-                try {
-                    $others = self::linkedServices($existingId, (int) $svc->serviceid, $hostname);
-                } catch (\Throwable $e) {
-                    $errors[] = "Service #{$svc->serviceid}: could not check existing links.";
-                    continue;
-                }
-                $live = array_filter($others, fn ($o) => !in_array((string) $o->domainstatus, ['Terminated', 'Cancelled', 'Fraud'], true));
-                if ($live !== []) {
-                    $other = reset($live);
-                    $errors[] = "Service #{$svc->serviceid}: sub-client #{$existingId} ({$email}) is already linked to service #{$other->id}; not linked twice.";
-                    continue;
-                }
-                try {
-                    \WHMCS\Database\Capsule::table('tblhosting')
-                        ->where('id', $svc->serviceid)
-                        ->update(['dedicatedip' => (string) $existingId]);
-                } catch (\Throwable $e) {
-                    $errors[] = "Service #{$svc->serviceid}: link DB update failed.";
-                    continue;
-                }
-                $linked++;
+                $review[] = self::bulkReviewLine((int) $svc->serviceid, $existingId, $hostname);
                 continue;
             }
 
@@ -953,7 +921,16 @@ class PanelDnsResellerService
             $created++;
         }
 
-        $summary = "Created: {$created} | Linked: {$linked} | Skipped (already provisioned): {$skipped}";
+        $summary = "Created: {$created} | Needs review (not linked): " . count($review)
+            . " | Skipped (already provisioned): {$skipped}";
+        if (!empty($review)) {
+            $summary .= ' | Review: ' . implode('; ', array_slice($review, 0, 5));
+            if (count($review) > 5) {
+                $summary .= ' … (' . count($review) . ' total)';
+            }
+            $summary .= ". These were NOT linked — a matching email does not prove ownership. To link one after"
+                . " confirming the client owns that sub-client, enter its id in the service's Dedicated IP field and run Create";
+        }
         if (!empty($errors)) {
             $first5 = array_slice($errors, 0, 5);
             $summary .= ' | Errors: ' . implode('; ', $first5);
@@ -962,6 +939,28 @@ class PanelDnsResellerService
             }
         }
         return $summary;
+    }
+
+    /**
+     * NO-EMAIL-LINK-01: one Bulk Sync "Needs review" entry. Informational only — it notes
+     * whether another live service already uses the sub-client, and links nothing.
+     */
+    private static function bulkReviewLine(int $serviceId, int $subClientId, string $hostname): string
+    {
+        if ($subClientId <= 0) {
+            return "service #{$serviceId}: a sub-client has this client's email but PanelDNS returned no id for it";
+        }
+        $usedBy = '';
+        try {
+            $live = array_filter(
+                self::linkedServices($subClientId, $serviceId, $hostname),
+                fn ($o) => !in_array((string) $o->domainstatus, ['Terminated', 'Cancelled', 'Fraud'], true)
+            );
+            if ($live !== []) {
+                $usedBy = ', already used by service #' . (int) reset($live)->id;
+            }
+        } catch (\Throwable $e) { /* informational only */ }
+        return "service #{$serviceId}: sub-client #{$subClientId} has this client's email{$usedBy}";
     }
 
     /**
@@ -1161,8 +1160,7 @@ class PanelDnsResellerService
 
         // Default — render the overview with usage cards.
         $vars = [
-            'paneldns_sub_client_id' => $params['customfields']['paneldns_sub_client_id']
-                ?? $params['model']?->dedicatedip,
+            'paneldns_sub_client_id' => $svc->subClientId(), // NO-EMAIL-LINK-03: dedicatedip only
             'paneldns_status'        => 'unknown',
             'paneldns_usage'         => null,
             'paneldns_limits'        => null,

@@ -4,6 +4,64 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.9.4] — 2026-11-18
+
+### Security — no account linking by email or client-supplied data
+
+WHMCS does not verify the email address a client signs up with, so anything a client
+typed is attacker-controlled. The sibling operator module had a critical account-takeover
+bug of this kind: an existing PanelDNS account was reused because its email matched, and
+"Login to PanelDNS" then signed the customer in as that other person. This module had
+three paths of the same class. A service is now linked only to the id PanelDNS issued for
+it, stored in the service's admin-only **Dedicated IP** field; nothing links on email.
+
+- **Bulk Sync linked by email (NO-EMAIL-LINK-01, critical).** For each unprovisioned
+  service, Bulk Sync Sub-clients looked the client's email up in PanelDNS and, if a
+  sub-client had it and no other live service used it, stored that sub-client's id on the
+  service. A client who set their WHMCS email to someone else's address became that
+  person in PanelDNS after the next Bulk Sync: Login to PanelDNS, the client-area portal
+  button and a resent welcome email all minted SSO for the victim's sub-client, and
+  Suspend/Terminate acted on it. Bulk Sync now never links — an email match is listed under
+  **Needs review (not linked)** with the service and sub-client ids, and the service is
+  left alone. Linking is a per-service admin step (enter the id in Dedicated IP and run
+  Create) after confirming who owns the sub-client. Creating sub-clients for services with
+  no match is unchanged. The summary line is now
+  `Created: N | Needs review (not linked): N | Skipped (already provisioned): N`.
+- **CreateAccount re-linked on a duplicate email (NO-EMAIL-LINK-02).** On PanelDNS's 422
+  "email already taken", 1.9.3 re-activated and linked the existing sub-client when its
+  id sat on a terminated service of the same WHMCS client. That id could itself have come
+  from an email link (above), so a mis-link the admin had terminated came back with the
+  next order. A duplicate email now always fails CreateAccount with a message naming the
+  sub-client and the service it belongs to; nothing is linked, re-activated or emailed. A
+  re-order after cancellation is re-linked by the admin (Dedicated IP + Create).
+- **Sub-client id read from a product custom field (NO-EMAIL-LINK-03).** The id was read
+  from a product custom field named `paneldns_sub_client_id` before Dedicated IP. A
+  product custom field that is not Admin Only can be filled in on the order form, so a
+  client could name any sub-client id in the org and Create, SSO, Suspend and Terminate
+  acted on it. The module never wrote that field and no documentation mentioned it; it is
+  no longer read. Dedicated IP must now be a positive whole number to count as linked.
+- **Grace period vs. a re-linked sub-client.** Because re-linking a re-order is now a
+  manual step, the old terminated service keeps its grace-period marker. The nightly grace
+  cron now checks first: if another live service of this module on the same PanelDNS host
+  uses the sub-client, it is not deleted and the stale marker is removed.
+
+Not affected: ClientEdit sends only `name` to the stored sub-client id and never re-resolves
+by email; the drift sync, domain, addon and payment hooks and the embedded DNS manager all
+act on the stored Dedicated IP id; ListAccounts only lists (WHMCS matches its results on
+Dedicated IP). This module calls only the reseller API (`/api/v1`) — the platform API's
+`owner_email_exists` / `user_email_exists` / `sso_refused_platform_admin` refusals
+(PanelDNS 3.104.1) cannot reach it.
+
+### Upgrade notes
+
+- If you created a product custom field named `paneldns_sub_client_id` and filled it in by
+  hand, copy each value into that service's Dedicated IP field — the custom field is ignored.
+- If you ran Bulk Sync on 1.9.3 or earlier, review services it **Linked**: for each, check
+  that the sub-client's email in PanelDNS belongs to that WHMCS client (the admin service
+  tab shows the sub-client email). Clear Dedicated IP on any that do not.
+
+---
+
 ## [1.9.3] — 2026-11-08
 
 ### Upgrade notes — the module was renamed

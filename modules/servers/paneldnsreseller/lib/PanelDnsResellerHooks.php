@@ -334,6 +334,25 @@ class PanelDnsResellerHooks
                 if ($deadline === null || $deadline > $today) continue; // no marker / not yet expired
 
                 $subClientId = (int) $svc->sub_client_id;
+
+                // NO-EMAIL-LINK-02 (v1.9.4): CreateAccount no longer re-links a re-order to
+                // the client's old sub-client, so that is now an admin step (Dedicated IP +
+                // Create) that leaves this old service's marker in place. If a live service
+                // of this module now uses the sub-client, keep it and drop the stale marker.
+                $liveId = $subClientId > 0
+                    ? self::liveServiceUsing($subClientId, (int) $svc->service_id, (string) $svc->server_hostname)
+                    : null;
+                if ($liveId !== null) {
+                    try {
+                        \WHMCS\Database\Capsule::table('tblhosting')
+                            ->where('id', $svc->service_id)
+                            ->update(['notes' => self::stripGraceMarker((string) $svc->notes)]);
+                    } catch (\Throwable $e) { /* swallow — retried next cron, still guarded */ }
+                    logActivity("PanelDNS: grace period expired for service #{$svc->service_id}, but sub-client {$subClientId}"
+                        . " is now used by live service #{$liveId} — not deleted; grace marker removed.");
+                    continue;
+                }
+
                 if ($subClientId > 0) {
                     try {
                         $resp = self::apiForServer($svc)->deleteSubClient($subClientId);
@@ -367,6 +386,26 @@ class PanelDnsResellerHooks
         } catch (\Throwable $e) {
             logActivity('PanelDNS grace period cron error (' . get_class($e) . ')');
         }
+    }
+
+    /**
+     * The id of another not-ended paneldnsreseller service on the same PanelDNS host whose
+     * Dedicated IP is this sub-client, or null. Throws on a DB error so the caller's
+     * per-run catch leaves every marker in place rather than deleting on a failed check.
+     */
+    private static function liveServiceUsing(int $subClientId, int $excludeServiceId, string $hostname): ?int
+    {
+        $row = \WHMCS\Database\Capsule::table('tblhosting')
+            ->join('tblservers',  'tblhosting.server',    '=', 'tblservers.id')
+            ->join('tblproducts', 'tblhosting.packageid', '=', 'tblproducts.id')
+            ->whereIn('tblproducts.servertype', self::SERVERTYPES)
+            ->where('tblhosting.dedicatedip', (string) $subClientId)
+            ->where('tblhosting.id', '!=', $excludeServiceId)
+            ->whereNotIn('tblhosting.domainstatus', ['Terminated', 'Cancelled', 'Fraud'])
+            ->where('tblservers.hostname', $hostname)
+            ->select(['tblhosting.id'])
+            ->first();
+        return $row ? (int) $row->id : null;
     }
 
     /**

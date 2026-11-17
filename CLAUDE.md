@@ -34,6 +34,7 @@
 | `1.9.1` | 2026-06-16 | `PanelDnsReseller*` class prefix — coexists with the platform module (untagged) |
 | `1.9.2` | 2026-08-27 | Past-due grace clock fix; `curl_close()` removed |
 | `1.9.3` | 2026-11-08 | Rename to `paneldnsreseller` + migration; self-contained ZIP; `getLegalVersion` shipped; import `zone_file`; paging; duplicate email; grace cron; errors/429 |
+| `1.9.4` | 2026-11-18 | Security: no account linking by email — Bulk Sync reports matches, duplicate-email Create never links, sub-client id from Dedicated IP only; grace cron skips a re-linked sub-client |
 
 ## Overview
 
@@ -70,6 +71,17 @@ WHMCS contract details that were wrong before 1.9.3 — keep them right:
   names. `PanelDnsResellerApi::scrub()` redacts secret keys at any depth.
 - Servertype filters use `PanelDnsResellerHooks::SERVERTYPES` (the name + legacy spellings);
   the drift sync covers this module only — the platform module reconciles its own.
+
+### Account linking — never by email (v1.9.4, NO-EMAIL-LINK-01/02/03)
+
+WHMCS does not verify client emails, so anything a client typed is attacker-controlled.
+A service's sub-client is the id PanelDNS issued for it, stored in `tblhosting.dedicatedip`
+(admin-only) — `subClientId()` reads nothing else. Never link, adopt or re-activate an
+existing sub-client because its email (or any client-fillable field, e.g. a product
+custom field) matches. A duplicate-email 422 fails CreateAccount with a message; Bulk Sync
+lists email matches under "Needs review" and links nothing. Linking an existing sub-client
+is a per-service admin step: enter the id in Dedicated IP and run Create. Email lookups
+(`findSubClientByEmail()`) may only feed messages and review lists.
 
 ### Shared files — keep in sync with paneldns-whmcs
 

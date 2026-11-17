@@ -204,6 +204,7 @@ final class PanelDnsResellerServiceTest extends TestCase
 
         $this->assertStringContainsString('no WHMCS service is linked to it', $msg);
         $this->assertStringContainsString("enter 77 in this service's Dedicated IP field", $msg);
+        $this->assertStringNotContainsString('Bulk Sync', $msg, 'Bulk Sync no longer links by email (NO-EMAIL-LINK-01)');
         $this->assertSame([], $this->dedicatedIpUpdates());
     }
 
@@ -217,44 +218,200 @@ final class PanelDnsResellerServiceTest extends TestCase
         $this->assertSame([], $this->dedicatedIpUpdates());
     }
 
-    public function test_reorder_by_the_same_client_after_termination_relinks_and_cancels_the_grace_delete(): void
+    public function test_reorder_by_the_same_client_after_termination_is_reported_not_relinked(): void
     {
+        // NO-EMAIL-LINK-02 (v1.9.4): up to 1.9.3 this re-linked and re-activated #77.
         $this->duplicate($this->subClient(), [(object) [
             'id' => 41, 'userid' => 7, 'domainstatus' => 'Terminated', 'notes' => "old notes\n[paneldns-grace:2099-01-01]",
         ]]);
 
-        $this->assertSame('success', PanelDnsResellerService::run('createAccount', $this->params(['configoption3' => ''])));
+        $msg = PanelDnsResellerService::run('createAccount', $this->params());
 
-        $patch = $this->api->callsTo('PATCH', '/api/v1/sub-clients/77');
-        $this->assertCount(1, $patch);
-        $this->assertSame(['status' => 'active', 'zone_limit' => 5, 'max_records' => 100], $patch[0]['body']);
-        $this->assertSame(['dedicatedip' => '77'], $this->dedicatedIpUpdates()[0]->arg);
+        $this->assertNotSame('success', $msg);
+        $this->assertStringContainsString("was used by this client's terminated service #41", $msg);
+        $this->assertStringContainsString('not linked automatically', $msg);
+        $this->assertStringContainsString("enter 77 in this service's Dedicated IP field and run Create again", $msg);
+        $this->assertSame([], $this->api->callsTo('PATCH', '/api/v1/sub-clients/77'), 'must not re-activate it');
+        $this->assertSame([], $this->api->callsTo('POST', '/api/v1/sub-clients/77/sso-token'), 'no welcome-email SSO link');
+        $this->assertSame([], $this->dedicatedIpUpdates());
+        $this->assertSame([], Capsule::ops('update', 'tblhosting'), 'nothing is written — not even the old grace marker');
+    }
 
-        $notes = array_values(array_filter(Capsule::ops('update', 'tblhosting'), fn ($q) => isset($q->arg['notes']) && $q->hasWhere('id', '=', 41)));
-        $this->assertSame(['notes' => 'old notes'], $notes[0]->arg, 'grace marker removed from the old service');
+    /**
+     * NO-EMAIL-LINK-02: whatever the existing sub-client's links look like, a duplicate
+     * email fails CreateAccount and never links, re-activates or mints SSO for it.
+     *
+     * @dataProvider decisionProvider
+     */
+    public function test_duplicate_email_never_links_in_any_case(array $links, int $user, string $reason): void
+    {
+        $this->duplicate($this->subClient(), $links);
+
+        $msg = PanelDnsResellerService::run('createAccount', $this->params(['userid' => $user]));
+
+        $this->assertNotSame('success', $msg);
+        $this->assertStringContainsString('#77', $msg);
+        $this->assertSame([], $this->api->callsTo('PATCH', '/api/v1/sub-clients/77'));
+        $this->assertSame([], $this->api->callsTo('POST', '/api/v1/sub-clients/77/sso-token'));
+        $this->assertSame([], $this->dedicatedIpUpdates());
     }
 
     /** @dataProvider decisionProvider */
-    public function test_duplicate_email_decision(array $links, int $user, string $action, string $reason): void
+    public function test_duplicate_email_decision(array $links, int $user, string $reason): void
     {
         $d = PanelDnsResellerService::duplicateEmailDecision($links, $user);
-        $this->assertSame($action, $d['action']);
         $this->assertSame($reason, $d['reason']);
+        $this->assertSame(['reason', 'service_id'], array_keys($d), 'a classification only — there is no link action');
     }
 
     public static function decisionProvider(): array
     {
         $svc = fn (int $id, int $user, string $status, string $notes = '') => (object) ['id' => $id, 'userid' => $user, 'domainstatus' => $status, 'notes' => $notes];
         return [
-            'no links'                       => [[], 7, 'refuse', 'unlinked'],
-            'live, same client'              => [[$svc(1, 7, 'Active')], 7, 'refuse', 'in_use_same_client'],
-            'suspended, same client'         => [[$svc(1, 7, 'Suspended')], 7, 'refuse', 'in_use_same_client'],
-            'pending, other client'          => [[$svc(1, 8, 'Pending')], 7, 'refuse', 'in_use_other_client'],
-            'terminated, other client'       => [[$svc(1, 8, 'Terminated')], 7, 'refuse', 'other_client'],
-            'terminated, same client'        => [[$svc(1, 7, 'Terminated')], 7, 'link', 'same_client_terminated'],
-            'mixed: one live wins'           => [[$svc(1, 7, 'Terminated'), $svc(2, 7, 'Active')], 7, 'refuse', 'in_use_same_client'],
-            'unknown current user'           => [[$svc(1, 7, 'Terminated')], 0, 'refuse', 'other_client'],
+            'no links'                       => [[], 7, 'unlinked'],
+            'live, same client'              => [[$svc(1, 7, 'Active')], 7, 'in_use_same_client'],
+            'suspended, same client'         => [[$svc(1, 7, 'Suspended')], 7, 'in_use_same_client'],
+            'pending, other client'          => [[$svc(1, 8, 'Pending')], 7, 'in_use_other_client'],
+            'terminated, other client'       => [[$svc(1, 8, 'Terminated')], 7, 'other_client'],
+            'terminated, same client'        => [[$svc(1, 7, 'Terminated', '[paneldns-grace:2099-01-01]')], 7, 'same_client_terminated'],
+            'mixed: one live wins'           => [[$svc(1, 7, 'Terminated'), $svc(2, 7, 'Active')], 7, 'in_use_same_client'],
+            'unknown current user'           => [[$svc(1, 7, 'Terminated')], 0, 'other_client'],
         ];
+    }
+
+    // ── Sub-client id comes from Dedicated IP only (NO-EMAIL-LINK-03) ──────────
+
+    public function test_a_client_supplied_custom_field_is_never_used_as_the_sub_client_id(): void
+    {
+        // A product custom field that is not Admin Only can be filled in on the order form.
+        $this->api->on('POST', '/api/v1/sub-clients/99/sso-token', FakeApi::json(200, ['ok' => true, 'data' => ['login_url' => 'https://paneldns.test/portal/sso/consume?token=victim']]));
+        $params = $this->params(['customfields' => ['paneldns_sub_client_id' => '99']]);
+
+        foreach (['adminSso', 'clientSso'] as $fn) {
+            $r = PanelDnsResellerService::$fn($params);
+            $this->assertFalse($r['success'], $fn);
+            $this->assertSame('Service not provisioned yet.', $r['errorMsg'], $fn);
+        }
+        $this->assertSame([], $this->api->callsTo('POST', '/api/v1/sub-clients/99/sso-token'));
+
+        // With a Dedicated IP set, that wins and the custom field is ignored.
+        $params['model'] = (object) ['dedicatedip' => '77'];
+        $this->assertSame('https://paneldns.test/portal/sso/consume?token=x', PanelDnsResellerService::clientSso($params)['redirectTo']);
+        $this->assertSame([], $this->api->callsTo('POST', '/api/v1/sub-clients/99/sso-token'));
+    }
+
+    public function test_create_account_ignores_a_custom_field_sub_client_id(): void
+    {
+        $this->api
+            ->on('PATCH', '/api/v1/sub-clients/99', FakeApi::json(200, ['ok' => true, 'data' => ['id' => 99]]))
+            ->on('POST', '/api/v1/sub-clients', FakeApi::json(201, ['ok' => true, 'data' => ['id' => 77]]));
+
+        $params = $this->params(['configoption3' => '', 'customfields' => ['paneldns_sub_client_id' => '99']]);
+        $this->assertSame('success', PanelDnsResellerService::run('createAccount', $params));
+
+        $this->assertSame([], $this->api->callsTo('PATCH', '/api/v1/sub-clients/99'), 'must not re-activate a client-named sub-client');
+        $this->assertCount(1, $this->api->callsTo('POST', '/api/v1/sub-clients'));
+        $this->assertSame(['dedicatedip' => '77'], $this->dedicatedIpUpdates()[0]->arg);
+    }
+
+    /** @dataProvider dedicatedIpProvider */
+    public function test_only_a_positive_integer_dedicated_ip_counts_as_linked(string $value, bool $linked): void
+    {
+        $params = $this->params();
+        $params['model'] = (object) ['dedicatedip' => $value];
+        $this->assertSame($linked, PanelDnsResellerService::clientSso($params)['success'], var_export($value, true));
+    }
+
+    public static function dedicatedIpProvider(): array
+    {
+        return [
+            'id'          => ['77', true],
+            'padded id'   => [' 77 ', true],
+            'empty'       => ['', false],
+            'zero'        => ['0', false],
+            'an IP'       => ['77.1.2.3', false],
+            'negative'    => ['-77', false],
+            'trailing'    => ['77abc', false],
+        ];
+    }
+
+    // ── Bulk Sync: report email matches, never link (NO-EMAIL-LINK-01) ─────────
+
+    /**
+     * Runs Bulk Sync over $services (rows of the services join), with the sub-client
+     * search answering $subClients and tblhosting links answering $links.
+     */
+    private function bulkSync(array $services, array $subClients, array $links = []): string
+    {
+        $this->api
+            ->on('GET', '/api/ping', FakeApi::json(200, ['ok' => true]))
+            ->on('GET', '/api/v1/sub-clients', FakeApi::json(200, [
+                'ok' => true, 'data' => $subClients, 'meta' => ['page' => 1, 'per_page' => 50, 'total' => count($subClients)],
+            ]))
+            ->on('POST', '/api/v1/sub-clients', FakeApi::json(201, ['ok' => true, 'data' => ['id' => 88]]));
+
+        Capsule::$handler = function (FakeQuery $q, string $op) use ($services, $links) {
+            if ($op !== 'get') return null;
+            if ($q->table === 'tblhosting as h') return $services;
+            if ($q->hasWhere('tblhosting.dedicatedip')) return $links;
+            return [];
+        };
+
+        return PanelDnsResellerService::bulkSyncForServer([
+            'serverid' => 4, 'serverhostname' => 'paneldns.test', 'serversecure' => true, 'serveraccesshash' => 'k',
+        ]);
+    }
+
+    private function bulkService(int $id, string $email, string $dedicatedIp = ''): object
+    {
+        return (object) [
+            'serviceid' => $id, 'userid' => 7, 'dedicatedip' => $dedicatedIp, 'domainstatus' => 'Active',
+            'email' => $email, 'firstname' => 'Mallory', 'lastname' => 'M', 'zone_limit' => '5', 'max_records' => '100',
+        ];
+    }
+
+    public function test_bulk_sync_reports_an_email_match_and_never_links_it(): void
+    {
+        // The victim's sub-client #77 is not linked to any WHMCS service; a WHMCS client
+        // has set their (unverified) email to the victim's address.
+        $out = $this->bulkSync([$this->bulkService(500, 'jane@example.com')], [$this->subClient()]);
+
+        $this->assertStringContainsString('Created: 0 | Needs review (not linked): 1', $out);
+        $this->assertStringContainsString("service #500: sub-client #77 has this client's email", $out);
+        $this->assertStringContainsString('NOT linked', $out);
+        $this->assertStringNotContainsString('Linked:', $out);
+        $this->assertSame([], $this->dedicatedIpUpdates(), 'no service may be pointed at the matched sub-client');
+        $this->assertSame([], $this->api->callsTo('POST', '/api/v1/sub-clients'), 'and no duplicate is attempted');
+        $this->assertSame([], $this->api->callsTo('PATCH', '/api/v1/sub-clients/77'));
+        $this->assertSame([], $this->api->callsTo('POST', '/api/v1/sub-clients/77/sso-token'));
+    }
+
+    public function test_bulk_sync_notes_when_the_matched_sub_client_is_in_use(): void
+    {
+        $out = $this->bulkSync(
+            [$this->bulkService(500, 'jane@example.com')],
+            [$this->subClient()],
+            [(object) ['id' => 41, 'userid' => 8, 'domainstatus' => 'Active', 'notes' => '']]
+        );
+        $this->assertStringContainsString('sub-client #77 has this client\'s email, already used by service #41', $out);
+        $this->assertSame([], $this->dedicatedIpUpdates());
+    }
+
+    public function test_bulk_sync_creates_for_no_match_and_skips_linked_services(): void
+    {
+        $out = $this->bulkSync(
+            [$this->bulkService(500, 'new@example.com'), $this->bulkService(501, 'jane@example.com', '77')],
+            [] // no sub-client has new@example.com
+        );
+
+        $this->assertStringContainsString('Created: 1 | Needs review (not linked): 0 | Skipped (already provisioned): 1', $out);
+        $post = $this->api->callsTo('POST', '/api/v1/sub-clients');
+        $this->assertCount(1, $post);
+        $this->assertSame('new@example.com', $post[0]['body']['email']);
+        $updates = $this->dedicatedIpUpdates();
+        $this->assertCount(1, $updates);
+        $this->assertSame(['dedicatedip' => '88'], $updates[0]->arg, 'only the id PanelDNS issued for this service is stored');
+        $this->assertTrue($updates[0]->hasWhere('id', '=', 500));
     }
 
     // ── SSO: WHMCS reads redirectTo ────────────────────────────────────────────
