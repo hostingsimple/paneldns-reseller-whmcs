@@ -1218,13 +1218,29 @@ class PanelDnsResellerService
             ];
         }
 
-        // WHMCS-PERM-01 (v1.9.6): the portal button and every embedded DNS page and form
-        // need the user's "Perform Single Sign-On" permission; anyone else gets the
-        // read-only overview.
-        $mayManage = self::userMayManage($params);
-        $notice    = null;
+        // SVC-STATUS-01 (v1.9.6): the portal button and the embedded DNS manager only for an
+        // Active service. Up to 1.9.5 nothing here looked at the service status: whether a
+        // Suspended, Pending or Terminated (grace period) service could edit DNS depended on
+        // WHMCS's page rendering alone, and PanelDNS refuses writes through the reseller
+        // token only for a suspended ZONE, not a suspended sub-client. A missing status
+        // refuses too. WHMCS passes the service status as $params['status'].
+        $serviceStatus = is_string($params['status'] ?? null) ? $params['status'] : '';
+        $active        = $serviceStatus === 'Active';
+
+        // WHMCS-PERM-01 (v1.9.6): ... and only for a user with the "Perform Single Sign-On"
+        // permission; anyone else gets the read-only overview.
+        $mayManage = $active && self::userMayManage($params);
+        $reason    = null;
+        if (!$active) {
+            $reason = 'DNS management is not available while this service is '
+                . ($serviceStatus !== '' ? $serviceStatus : 'not active') . '.';
+        } elseif (!$mayManage) {
+            $reason = 'DNS management is not available to your user account for this service.';
+        }
+
+        $notice = null;
         if (!$mayManage && ($action === 'sso' || in_array($action, self::EMBEDDED_ACTIONS, true))) {
-            $notice = self::MSG_NO_PERMISSION;
+            $notice = $active ? self::MSG_NO_PERMISSION : $reason;
             $action = '';
         }
 
@@ -1266,8 +1282,8 @@ class PanelDnsResellerService
         // Default — render the overview with usage cards.
         $vars = [
             'paneldns_sub_client_id' => $svc->subClientId(), // NO-EMAIL-LINK-03: dedicatedip only
-            'paneldns_can_manage'    => $mayManage,          // WHMCS-PERM-01: show the DNS buttons
-            'paneldns_manage_reason' => $mayManage ? null : 'DNS management is not available to your user account for this service.',
+            'paneldns_can_manage'    => $mayManage,          // WHMCS-PERM-01 / SVC-STATUS-01: show the DNS buttons
+            'paneldns_manage_reason' => $reason,
             'paneldns_notice'        => $notice,
             'paneldns_status'        => 'unknown',
             'paneldns_usage'         => null,
