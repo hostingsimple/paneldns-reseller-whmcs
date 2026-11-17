@@ -39,7 +39,7 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '1.9.4');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.9.5');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';
@@ -127,7 +127,7 @@ function paneldnsreseller_ConfigOptions(): array
         'Auto-Create Zone on Domain Order' => [
             'Type'        => 'yesno',
             'Default'     => 'yes',
-            'Description' => 'When a domain is registered or transferred for this client, automatically create a matching DNS zone in PanelDNS.',
+            'Description' => 'When a domain on this client\'s account is registered, or its transfer completes, automatically create a matching DNS zone in PanelDNS.',
         ],
         'Auto-Delete Zone on Domain Expiry' => [
             'Type'        => 'yesno',
@@ -140,6 +140,13 @@ function paneldnsreseller_ConfigOptions(): array
             'Size'        => 4,
             'Default'     => '0',
             'Description' => 'Days to wait before permanently deleting the sub-client after a WHMCS termination. 0 = delete immediately (default). During the grace period the sub-client is suspended in PanelDNS and removed nightly once the period expires.',
+        ],
+        // configoption12 — ZONE-OWN-02 (v1.9.5). Keep it last: WHMCS stores module
+        // options by position (configoptionN), so inserting above it would shift the rest.
+        'Allow Zones for Domains Not in This Account' => [
+            'Type'        => 'yesno',
+            'Default'     => 'no',
+            'Description' => 'Off (default): a customer can add a zone only for a domain that is Active on their own WHMCS account. On: any name, except one that is, contains or sits inside another customer\'s zone. A zone for a domain the customer does not own takes over its DNS once that domain points at your nameservers, so turn this on only if your customers bring domains registered elsewhere.',
         ],
     ];
 }

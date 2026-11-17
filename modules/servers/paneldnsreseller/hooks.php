@@ -47,19 +47,23 @@ add_hook('DailyCronJob', 1, function () {
 });
 
 /**
- * DOMAIN-01: auto-create a DNS zone when a domain is registered or transferred
- * via a registrar module. Both hooks pass the registrar module params nested
- * under $vars['params'] — the domain is sld+tld (tld includes the dot), and
- * many registrars also expose a convenience 'domainname'. Gated per-product by
- * "Auto-Create Zone on Domain Order".
+ * DOMAIN-01: auto-create a DNS zone when a domain is registered, or when its transfer
+ * has COMPLETED, for a client with an active service of this module. Gated per-product
+ * by "Auto-Create Zone on Domain Order", and only for a domain on that client's own
+ * WHMCS account (ZONE-OWN-04).
+ *
+ * ZONE-OWN-04 (v1.9.5): AfterRegistrarTransfer is no longer hooked. WHMCS runs it when
+ * the transfer command has been sent to the registrar, whether or not it succeeded, so
+ * ordering a transfer of someone else's domain created that domain's zone under the
+ * orderer's sub-client. DomainTransferCompleted runs when WHMCS's domain sync cron
+ * marks the transfer completed. https://developers.whmcs.com/hooks-reference/domain/
  */
-$paneldnsDomainCreate = function (array $vars) {
-    $p      = $vars['params'] ?? [];
-    $domain = $p['domainname'] ?? (($p['sld'] ?? '') . ($p['tld'] ?? ''));
-    PanelDnsResellerHooks::onDomainEvent((int) ($p['userid'] ?? 0), (string) $domain, 'create');
-};
-add_hook('AfterRegistrarRegistration', 1, $paneldnsDomainCreate);
-add_hook('AfterRegistrarTransfer', 1, $paneldnsDomainCreate);
+add_hook('AfterRegistrarRegistration', 1, function (array $vars) {
+    PanelDnsResellerHooks::onDomainRegistered($vars);
+});
+add_hook('DomainTransferCompleted', 1, function (array $vars) {
+    PanelDnsResellerHooks::onDomainTransferCompleted($vars);
+});
 
 /**
  * DOMAIN-02: optionally delete the DNS zone when a domain is deleted. The

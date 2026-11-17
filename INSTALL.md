@@ -182,8 +182,19 @@ platform provider — your clients and your own admin setup see only your brand.
    | Send Welcome Email | `Yes` | Sends portal login link on provisioning |
    | NS1–NS4 Hostname | *(leave blank)* | Only needed for white-label nameservers |
    | SOA Email | *(leave blank)* | Only needed if you want a custom SOA contact email |
-   | Auto-Create Zone on Domain Order | `Yes` | Recommended — zones are created automatically when clients register domains |
+   | Auto-Create Zone on Domain Order | `Yes` | Recommended — zones are created automatically when clients register domains, or a transfer completes |
    | Auto-Delete Zone on Domain Expiry | `No` | Leave off unless you are sure clients don't need the data |
+   | Allow Zones for Domains Not in This Account | `No` | Off: clients can add zones only for domains Active on their own WHMCS account. Turn on only if they host domains registered elsewhere (see below) |
+
+   **Allow Zones for Domains Not in This Account** (since 1.9.5). All your customers
+   share your nameservers, which answer from the most specific zone they hold. A zone for
+   a name the customer does not own therefore takes over that name's DNS once the name
+   points at your nameservers. With the option **off**, **Add Zone** accepts only a domain
+   that is **Active** under **Domains** on the customer's own WHMCS account. The product's
+   Domain field does not count, because the customer types it at order time. With the
+   option **on**, any name is accepted except one that equals, contains or sits inside a
+   zone of another sub-client or of your own org. Turn it on for DNS-only plans whose
+   customers bring domains registered elsewhere.
 
 6. Set your pricing on the **Pricing** tab as normal
 7. Click **Save Changes**
@@ -335,13 +346,24 @@ If no number is found in the addon name, 5 extra zones is assumed as a fallback.
 
 ## Step 10 — (Optional) Automatic zone creation on domain registration
 
-When a client registers or transfers a domain through WHMCS (via any registrar
-module), this module can automatically create a matching DNS zone in PanelDNS.
+When a client registers a domain through WHMCS (via any registrar module), or a domain
+transfer to you completes, this module can automatically create a matching DNS zone in
+PanelDNS. The zone goes to the sub-client of that client's active service of this module.
 
 This feature is enabled by default via the **Auto-Create Zone on Domain Order**
-product config option. No additional setup is required — the module registers a
-WHMCS hook (`AfterRegistrarRegistration`, `AfterRegistrarTransfer`) that fires
-after any domain event.
+product config option. No additional setup is required. The module registers two WHMCS
+hooks:
+
+- `AfterRegistrarRegistration`, which runs after a successful register command;
+- `DomainTransferCompleted`, which runs when WHMCS's domain sync cron marks a transfer
+  completed. Transfers therefore get their zone after the next domain sync that sees the
+  transfer complete, not when the transfer is ordered.
+
+Before 1.9.5 the module used `AfterRegistrarTransfer`. WHMCS runs that hook when the
+transfer is submitted, whether or not it succeeds, so ordering a transfer of someone
+else's domain created its zone. Both hooks now also check that the domain is on that
+client's account (and not Cancelled, Fraud, Transferred Away or Expired). Otherwise they
+skip it and write an Activity Log entry.
 
 To also auto-delete zones when domains expire, set **Auto-Delete Zone on Domain
 Expiry** to `Yes` on the product. This is off by default because zone data may
@@ -390,6 +412,9 @@ screens and the client area only ever show a generic "could not connect" line.
 1. Download the new ZIP from the [Releases page](https://github.com/hostingsimple/paneldns-reseller-whmcs/releases)
 2. Extract it over your WHMCS root, overwriting `modules/servers/paneldnsreseller/`
 3. No database changes or WHMCS cache clearing needed
+4. **1.9.5:** clients can now add zones only for domains on their own WHMCS account. On
+   products whose customers host domains registered elsewhere, tick **Allow Zones for
+   Domains Not in This Account** (Step 4).
 
 ### From 1.9.2 or earlier — the module was renamed
 
@@ -480,10 +505,33 @@ Sub-client IDs stored on services (`tblhosting.dedicatedip`) are not touched.
 
 - Verify **Auto-Create Zone on Domain Order** is set to `Yes` on the product
 - Confirm the WHMCS module log shows a `AfterRegistrarRegistration` hook firing
+- For a transfer, the zone is created only once WHMCS's domain sync cron marks the
+  transfer completed (`DomainTransferCompleted`), not when it is ordered. Check that
+  **Domain Sync** is enabled in WHMCS's automation settings.
 - The client must have an **Active** paneldnsreseller service — the hook only fires
   if a provisioned service is found for that client
+- The domain must be on that client's account. The Activity Log shows
+  `auto-create zone … skipped` when it is not.
 - The token needs `zones:write`, and WHMCS must have loaded the module's hooks (save
   the product's Module Settings once — Step 4)
+
+### Client can't add a zone
+
+The client sees one of the lines below. The full reason is in the **Activity Log**
+(`PanelDNS: refused zone …`).
+
+- **"You can only add zones for domains on your account."** The name is not a domain that
+  is Active under the client's **Domains**, and the product's **Allow Zones for Domains Not
+  in This Account** option is off. Either add the domain to the client's account, or tick
+  the option if the product is meant for domains registered elsewhere.
+- **"The transfer of … has not completed yet."** The domain is on the account as Pending
+  Transfer. Wait for the transfer to complete, then add the zone.
+- **"This zone name is unavailable."** The name equals, contains or sits inside a zone
+  that belongs to another sub-client or to your org. Or PanelDNS refused it as already
+  existing; the zone may also be the client's own, so check their zone list. The Activity
+  Log entry names the zone it overlaps.
+- **"Could not check this zone name right now."** A zone-list or domain lookup failed, so the
+  module refused the name rather than guess. The Module Log has the failed call.
 
 ### Admin service tab shows "Not provisioned yet"
 

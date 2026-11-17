@@ -119,10 +119,32 @@ If the email is missing: verify the template exists at
 
 ## 11 — Create a zone in the embedded manager
 
-1. In the client area, click **Manage DNS Zones → Add Zone**
-2. Enter a test domain name (e.g. `test-paneldns.example.com`)
+1. Give the test client a domain under **Domains** with status **Active** (e.g. add
+   `test-paneldns.example` by hand in the admin area)
+2. In the client area, click **Manage DNS Zones → Add Zone** and enter that domain
 3. ✅ Expected: zone appears in the list; PanelDNS dashboard shows it too; the browser
    address bar shows `…&customAction=zones` (not `modop=custom`)
+
+## 11b — Zone ownership (v1.9.5)
+
+With **Allow Zones for Domains Not in This Account** off (the default):
+
+1. **Add Zone** with a domain that is not on the test client's account
+2. ✅ Expected: "You can only add zones for domains on your account."; nothing is created in
+   PanelDNS; the Activity Log has `PanelDNS: refused zone … not an Active domain on the
+   client's account`
+3. Set the test domain to **Pending Transfer** and try again → ✅ "The transfer of … has not
+   completed yet."; set it back to Active
+
+Tick the option on the product, then, with a second test client whose service has a zone
+`other-customer.example` in PanelDNS:
+
+4. **Add Zone** `shop.other-customer.example` as the first client
+5. ✅ Expected: "This zone name is unavailable." and nothing else about the other zone; the
+   Activity Log names the zone it overlaps
+6. **Add Zone** the first client's existing zone name again → ✅ the same generic line (not
+   "Zone already exists.")
+7. Untick the option again
 
 ---
 

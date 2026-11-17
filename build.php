@@ -9,11 +9,11 @@
  *
  * Usage:
  *   php build.php                           # uses the default version below
- *   RELEASE_VERSION=1.9.4 php build.php    # CI passes the stripped tag
+ *   RELEASE_VERSION=1.9.5 php build.php    # CI passes the stripped tag
  *   PANELDNS_DIST_DIR=/tmp/out php build.php   # write the ZIP elsewhere (tests)
  */
 
-$version = getenv('RELEASE_VERSION') ?: '1.9.4';
+$version = getenv('RELEASE_VERSION') ?: '1.9.5';
 $root    = __DIR__;
 $module  = 'paneldnsreseller';
 $modDir  = $root . '/modules/servers/' . $module;

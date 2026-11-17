@@ -35,6 +35,7 @@
 | `1.9.2` | 2026-08-27 | Past-due grace clock fix; `curl_close()` removed |
 | `1.9.3` | 2026-11-08 | Rename to `paneldnsreseller` + migration; self-contained ZIP; `getLegalVersion` shipped; import `zone_file`; paging; duplicate email; grace cron; errors/429 |
 | `1.9.4` | 2026-11-18 | Security: no account linking by email — Bulk Sync reports matches, duplicate-email Create never links, sub-client id from Dedicated IP only; grace cron skips a re-linked sub-client |
+| `1.9.5` | 2026-11-18 | Security: zones only for the client's own domains (configoption12 opt-out with overlap check); auto-create on `DomainTransferCompleted`, not `AfterRegistrarTransfer`; generic "unavailable" for name conflicts |
 
 ## Overview
 
@@ -82,6 +83,28 @@ custom field) matches. A duplicate-email 422 fails CreateAccount with a message;
 lists email matches under "Needs review" and links nothing. Linking an existing sub-client
 is a per-service admin step: enter the id in Dedicated IP and run Create. Email lookups
 (`findSubClientByEmail()`) may only feed messages and review lists.
+
+### Zone ownership (v1.9.5, ZONE-OWN-01..05)
+
+A reseller's customers share its nameservers, which answer from the most specific zone, so
+a zone for someone else's name is a takeover of that name. Every path that creates a zone
+must prove the name is the client's:
+
+- Client area (`EmbeddedDnsManager::zoneCreateRefusal()`): a `tbldomains` row of the
+  client (`$params['userid']`), exact lower-cased name, status `Active`. `Pending Transfer`
+  is not ownership. `tblhosting.domain` (`$params['domain']`) is client-typed at order time
+  and is never proof.
+- `configoption12` "Allow Zones for Domains Not in This Account" (yesno, default off) lifts
+  that, but `overlapRefusal()` still refuses a name equal to, above or inside any zone whose
+  `sub_client_id` is not this service's (org-level zones included). It pages every listing
+  and fails closed on an error or a truncated listing. New options go last: WHMCS stores
+  them by position.
+- Hooks: `AfterRegistrarRegistration` (successful register) and `DomainTransferCompleted`
+  (sync cron). Never `AfterRegistrarTransfer`: it runs on submission, "regardless of success
+  state". `onDomainEvent('create')` re-checks `tbldomains` itself.
+- A 409 or a name-conflict 422 (`isNameConflict()`) shows only "This zone name is
+  unavailable."; the detail goes to `logActivity()`. Never show PanelDNS's conflict wording
+  to a client.
 
 ### Shared files — keep in sync with paneldns-whmcs
 

@@ -23,8 +23,24 @@ if (!defined('WHMCS')) {
     die('Access denied.');
 }
 
+require_once __DIR__ . '/PanelDnsResellerHooks.php'; // ZONE-OWN-01: domain ownership + isYes()
+
 class PanelDnsEmbeddedDnsManager
 {
+    /**
+     * ZONE-OWN-03: the only text a client sees when a name is refused because it is, or
+     * overlaps, someone else's zone. PanelDNS's own wording ("Zone already exists.")
+     * told a customer which names other customers host; the detail goes to the admin
+     * Activity Log instead.
+     */
+    const MSG_UNAVAILABLE = 'This zone name is unavailable.';
+
+    /** ZONE-OWN-01: a name that is not one of the client's own WHMCS domains. */
+    const MSG_NOT_OWNED = 'You can only add zones for domains on your account.';
+
+    /** ZONE-OWN-02: an ownership or overlap lookup failed — refuse rather than guess. */
+    const MSG_CHECK_FAILED = 'Could not check this zone name right now. Please try again in a few minutes.';
+
     /**
      * IMPORT-01: PanelDNS validates zone_file as max:51200 (characters). Capped here in
      * bytes, which is never more permissive.
@@ -211,7 +227,9 @@ class PanelDnsEmbeddedDnsManager
 
     private function doZoneCreate(): array
     {
-        $name = trim((string) ($_POST['name'] ?? ''));
+        // PanelDNS lower-cases zone names; do it first so the ownership checks compare
+        // the name PanelDNS will store.
+        $name = strtolower(trim((string) ($_POST['name'] ?? '')));
         if ($name === '') return $this->withFlash('error', 'Zone name is required.', $this->renderZoneCreate());
 
         // FIX-H4: validate zone name — 253 char limit, no consecutive dots, RFC-safe chars only.
@@ -221,6 +239,13 @@ class PanelDnsEmbeddedDnsManager
             || !preg_match('/^[a-zA-Z0-9]([a-zA-Z0-9_\-]|\.[a-zA-Z0-9])*$/', $name)
         ) {
             return $this->withFlash('error', 'Invalid zone name.', $this->renderZoneCreate());
+        }
+
+        // ZONE-OWN-01 (v1.9.5): only the client's own domains, unless the product allows
+        // others — and then never a name inside, above or equal to another customer's zone.
+        $refusal = $this->zoneCreateRefusal($name);
+        if ($refusal !== null) {
+            return $this->withFlash('error', $refusal, $this->renderZoneCreate());
         }
 
         // QUOTA-02 (v1.9.3): no pre-flight summary call. PanelDNS enforces the zone limit
@@ -233,7 +258,7 @@ class PanelDnsEmbeddedDnsManager
         ]);
 
         if (!$resp['ok']) {
-            return $this->withFlash('error', $this->apiError($resp, 'Failed to create zone.'), $this->renderZoneCreate());
+            return $this->withFlash('error', $this->zoneCreateError($resp, $name), $this->renderZoneCreate());
         }
 
         $this->zonesCache = null;
@@ -241,6 +266,158 @@ class PanelDnsEmbeddedDnsManager
         $this->rotateCsrf(); // FIX-M5: rotate token after successful mutation.
         $this->flash('success', 'Zone ' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . ' created.');
         return $this->redirectTo('zones');
+    }
+
+    /**
+     * ZONE-OWN-01/02 (v1.9.5): why this client may not create a zone for $name, or null.
+     *
+     * Up to 1.9.4 any name that passed the syntax check was sent to PanelDNS, which only
+     * refused an exact duplicate in the org. A customer could add `shop.victim.com`, or
+     * `victim.com` before its owner did; both sit on the reseller's shared nameservers,
+     * which answer from the most specific zone they hold, so the customer took over
+     * another customer's names (mail, TLS certificates, phishing).
+     *
+     * Allowed without further checks: a domain that is Active on this client's own
+     * WHMCS account (tbldomains, exact name). A domain whose transfer is still pending
+     * is not the client's yet. The service's own Domain field is deliberately NOT
+     * proof (ZONE-OWN-05): the customer types it on the order form ("use my existing
+     * domain") and WHMCS never verifies it, the same trap as email in v1.9.4.
+     *
+     * With "Allow Zones for Domains Not in This Account" (configoption12) ticked, any
+     * other name is allowed unless it equals, contains or sits inside a zone that is
+     * not this sub-client's (another sub-client's, or the reseller's own).
+     */
+    private function zoneCreateRefusal(string $name): ?string
+    {
+        $userId = (int) ($this->params['userid'] ?? $this->params['clientsdetails']['userid'] ?? 0);
+
+        try {
+            $statuses = PanelDnsResellerHooks::clientDomainStatuses($userId, $name);
+        } catch (\Throwable $e) {
+            $this->logZoneRefusal($name, 'tbldomains lookup failed (' . get_class($e) . ')');
+            return self::MSG_CHECK_FAILED;
+        }
+
+        if (in_array('Active', $statuses, true)) {
+            return null;
+        }
+
+        // configoption12 — "Allow Zones for Domains Not in This Account" (default off).
+        if (!PanelDnsResellerHooks::isYes($this->params['configoption12'] ?? '')) {
+            if (in_array('Pending Transfer', $statuses, true)) {
+                $this->logZoneRefusal($name, 'domain transfer not completed yet');
+                return 'The transfer of ' . htmlspecialchars($name, ENT_QUOTES, 'UTF-8')
+                    . ' has not completed yet. You can add its zone once it has.';
+            }
+            $this->logZoneRefusal($name, 'not an Active domain on the client\'s account');
+            return self::MSG_NOT_OWNED;
+        }
+
+        return $this->overlapRefusal($name);
+    }
+
+    /**
+     * ZONE-OWN-02: refuse $name when a zone that is not this sub-client's is the same
+     * name, a parent of it or a child of it. Fails closed: a lookup that errors or is
+     * cut short refuses the name.
+     *
+     * At most three listing calls, however deep the name:
+     *   - the 1- and 2-label suffixes (`com`, `example.com`) by exact `?name=`;
+     *   - one `?search=` (substring) on the last three labels — or the whole name when it
+     *     is shorter — which returns every longer parent, the name itself and every
+     *     child, since all of them contain that suffix. Matches are re-checked here, so
+     *     an unrelated hit such as `myexample.com` is ignored.
+     * Every listing is paged (PanelDNS returns 50 zones per page, ignoring per_page).
+     */
+    private function overlapRefusal(string $name): ?string
+    {
+        $labels = explode('.', $name);
+        $count  = count($labels);
+
+        $lookups = [];
+        for ($n = 1; $n <= min(2, $count - 1); $n++) {
+            $parent = implode('.', array_slice($labels, -$n));
+            $lookups[] = [['name' => $parent], fn (string $z) => $z === $parent];
+        }
+        $suffix = implode('.', array_slice($labels, -min(3, $count)));
+        $lookups[] = [['search' => $suffix], fn (string $z) => self::namesOverlap($z, $name)];
+
+        foreach ($lookups as [$query, $matches]) {
+            $resp = $this->api->getAllPages('/api/v1/zones', $query, self::ZONES_MAX_PAGES);
+            if (!$resp['ok'] || !empty($resp['truncated'])) {
+                $this->logZoneRefusal($name, 'overlap check failed (' . http_build_query($query) . ', HTTP '
+                    . (int) ($resp['status'] ?? 0) . (!empty($resp['truncated']) ? ', truncated' : '') . ')');
+                return self::MSG_CHECK_FAILED;
+            }
+            foreach ($resp['data'] as $zone) {
+                if (!is_array($zone)) continue;
+                $zoneName = strtolower(rtrim(trim((string) ($zone['name'] ?? '')), '.'));
+                if ($zoneName === '' || !$matches($zoneName)) continue;
+                if ((int) ($zone['sub_client_id'] ?? 0) === $this->subClientId) continue; // this client's own
+                $this->logZoneRefusal($name, 'overlaps zone ' . $zoneName . ' (#' . (int) ($zone['id'] ?? 0)
+                    . ', sub-client ' . ((int) ($zone['sub_client_id'] ?? 0) ?: 'none (org zone)') . ')');
+                return self::MSG_UNAVAILABLE;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * True when two zone names are the same, or one is a parent of the other.
+     *
+     * @internal public for unit tests.
+     */
+    public static function namesOverlap(string $a, string $b): bool
+    {
+        $a = strtolower(rtrim($a, '.'));
+        $b = strtolower(rtrim($b, '.'));
+        return $a !== '' && $b !== ''
+            && ($a === $b || str_ends_with($a, '.' . $b) || str_ends_with($b, '.' . $a));
+    }
+
+    /**
+     * ZONE-OWN-03: the client-facing line for a failed create. A 409, or a 422 about the
+     * name being taken, shows MSG_UNAVAILABLE; the PanelDNS detail goes to the Activity
+     * Log. Everything else (zone limit reached, plan restrictions) is shown as before.
+     */
+    private function zoneCreateError(array $resp, string $name): string
+    {
+        $status = (int) ($resp['status'] ?? 0);
+        if ($status === 409 || ($status === 422 && self::isNameConflict($resp))) {
+            $this->logZoneRefusal($name, 'PanelDNS HTTP ' . $status . ': ' . $this->apiError($resp, '(no message)'));
+            return self::MSG_UNAVAILABLE;
+        }
+        return $this->apiError($resp, 'Failed to create zone.');
+    }
+
+    /**
+     * A 422 that refuses the name because it is taken or overlaps another zone: a
+     * validation error on `name`, or wording such as "already exists" or "unavailable"
+     * (PanelDNS's own race-path duplicate, its overlap refusal, or a DNS provider's).
+     *
+     * @internal public for unit tests.
+     */
+    public static function isNameConflict(array $resp): bool
+    {
+        if (is_array($resp['errors'] ?? null) && array_key_exists('name', $resp['errors'])) {
+            return true;
+        }
+        return (bool) preg_match(
+            '/already\s+exist|unavailable|not\s+available|overlap|conflict|in\s+use|already\s+been\s+taken|duplicate/i',
+            (string) ($resp['error'] ?? '')
+        );
+    }
+
+    /** ZONE-OWN-03: a refused zone name, with the reason, for the admin Activity Log. */
+    private function logZoneRefusal(string $name, string $why): void
+    {
+        if (!function_exists('logActivity')) return;
+        // $name passed the zone-name regex (letters, digits, '-', '_', '.') before this.
+        logActivity(
+            'PanelDNS: refused zone ' . $name . ' for service #' . (int) ($this->params['serviceid'] ?? 0)
+                . ' (sub-client ' . $this->subClientId . '): ' . substr($why, 0, 300),
+            (int) ($this->params['userid'] ?? 0)
+        );
     }
 
     /**
