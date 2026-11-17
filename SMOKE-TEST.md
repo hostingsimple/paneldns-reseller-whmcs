@@ -142,8 +142,8 @@ If the email is missing: verify the template exists at
 11. Suspend the service, then set the sub-client to **active** in the PanelDNS dashboard
     and run the WHMCS cron (`php -q crons/cron.php` with the daily jobs)
 12. ✅ Expected (v1.9.6): the service stays **Suspended** in WHMCS, the sub-client is
-    "suspended" again in PanelDNS, and the Activity Log has `drift fixed … suspended in
-    PanelDNS`. Unsuspend the service afterwards
+    "suspended" again in PanelDNS, and the Activity Log has `drift fixed: sub-client
+    suspended again in PanelDNS`. Unsuspend the service afterwards
 
 ---
 
@@ -255,3 +255,4 @@ and filter by module name `paneldns`:
 - ✅ No unexpected errors
 - ✅ API calls show redacted Authorization headers (no raw token in logs)
 - ✅ `?search=` parameters show `[REDACTED]` (not raw email addresses)
+- ✅ `sso-token` entries show `"login_url":"[REDACTED]"` — no `/sso/consume` link (v1.9.6)

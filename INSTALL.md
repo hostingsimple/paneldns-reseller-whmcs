@@ -391,8 +391,13 @@ status with the PanelDNS sub-client status. **WHMCS is the source of truth** (si
 | Active | suspended | sets the service **Suspended** in WHMCS |
 | Active or Suspended | cancelled | sets the service **Terminated** in WHMCS |
 | Suspended | active | **suspends the sub-client again** in PanelDNS; WHMCS is not changed |
-| Pending (or another status) | active | writes an Activity Log line for you to review; nothing is changed |
+| Pending, Completed (or another status) | active, suspended or cancelled | writes "drift reported, not applied" to the Activity Log for you to review; nothing is changed |
 | any | not found (404) | writes an Activity Log line and adds `[paneldns-drift:not-found]` to the service's admin notes; the status is not changed |
+
+The sync never sets a service Active. A PanelDNS rate limit stops the run until the next
+night. A service whose **Dedicated IP** holds anything but the sub-client id (an IP
+address, say) is skipped. The policy is the same as the operator module's
+(paneldns-whmcs 1.1.4), except that a "not found" never terminates a service here.
 
 If three or more lookups on one server come back "not found" and they are most of that
 server's lookups, or PanelDNS refuses the token (HTTP 401/403), the sync assumes the

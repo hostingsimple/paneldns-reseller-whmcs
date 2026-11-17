@@ -36,7 +36,7 @@
 | `1.9.3` | 2026-11-08 | Rename to `paneldnsreseller` + migration; self-contained ZIP; `getLegalVersion` shipped; import `zone_file`; paging; duplicate email; grace cron; errors/429 |
 | `1.9.4` | 2026-11-18 | Security: no account linking by email — Bulk Sync reports matches, duplicate-email Create never links, sub-client id from Dedicated IP only; grace cron skips a re-linked sub-client |
 | `1.9.5` | 2026-11-18 | Security: zones only for the client's own domains (configoption12 opt-out with overlap check); auto-create on `DomainTransferCompleted`, not `AfterRegistrarTransfer`; generic "unavailable" for name conflicts; PAY-02: removed the `InvoicePaymentSuccess` hook that unsuspended on any payment |
-| `1.9.6` | 2026-11-18 | Security (rescan Medium/Low): drift sync treats WHMCS as source of truth, never terminates on 404; only `PanelDNS +N Zones` addons, limit recomputed; client-area DNS needs an Active service and the `productsso` permission; Terminate deletes the zones first; delete-confirm attribute escaping; generic 0/5xx client errors; SSRF resolve-once-and-pin; deterministic service for domain hooks |
+| `1.9.6` | 2026-11-18 | Security (rescan Medium/Low) + paneldns-whmcs 1.1.4 shared-code port (strict ids, drift policy, log redaction): drift sync treats WHMCS as source of truth, never terminates on 404; only `PanelDNS +N Zones` addons, limit recomputed; client-area DNS needs an Active service and the `productsso` permission; Terminate deletes the zones first; delete-confirm attribute escaping; generic 0/5xx client errors; SSRF resolve-once-and-pin; deterministic service for domain hooks |
 
 ## Overview
 
@@ -118,10 +118,12 @@ it suspended for non-payment ("Overdue on Payment"), and `InvoicePaid` runs afte
 
 ### WHMCS is the source of truth for status (v1.9.6, DRIFT-SOT-01, DRIFT-404-01)
 
-`PanelDnsResellerDriftSync::decide()` only moves a service towards the more restrictive
-state (Active → Suspended/Terminated, Suspended → Terminated) and re-suspends in PanelDNS a
-sub-client that is active while WHMCS has the service Suspended. It never writes Active and
-never touches a Pending service (logged for review). A 404 never terminates: it adds
+Same policy as paneldns-whmcs 1.1.4 (DRIFT-TRUTH-01).
+`PanelDnsResellerDriftSync::decide()` maps the upstream status and writes it only when
+stricter (`STATUS_RANK` Active < Suspended < Terminated). It re-suspends in PanelDNS a
+sub-client that is active while WHMCS has the service Suspended. Every other mismatch,
+Pending and Completed included, is logged "drift reported, not applied". It never writes
+Active, and a 429 stops the run. The one deliberate difference from paneldns-whmcs: a 404 never terminates here. It adds
 `[paneldns-drift:not-found]` to the admin notes, and only when 404s are the exception on
 that server; a mostly-404 server (3+) or a 401/403 is a token/org mistake and is left
 alone for the run. Do not add any path that copies an upstream status into WHMCS that is
@@ -190,9 +192,18 @@ The copies here differ by design in their class names (`PanelDnsReseller*`, with
 the reseller endpoint, error/429 parsing, `getAllPages()`, `findSubClientByEmail()`,
 redacted transport errors, deep log scrubbing, DriftSync scoped to this module, the
 LicenceCheck guard and failure reasons; WelcomeMail's array `customvars` mirrors
-paneldns-whmcs PR #1) — reconcile these with paneldns-whmcs. **v1.9.6 changed
-`shared/DriftSync.php` (WHMCS as source of truth, 404 handling, test seam) and
-`shared/PanelDnsApi.php` (SSRF resolve-once-and-pin, `resolveHost()` seam) here first.**
+paneldns-whmcs PR #1) — reconcile these with paneldns-whmcs. **v1.9.6 ported paneldns-whmcs 1.1.4** into `shared/`:
+- `parseId()` / ID-STRICT-01 (99bf546) and the DRIFT-TRUTH-01 drift policy (8192eab)
+  into `DriftSync.php`;
+- LOG-REDACT-01 (f526b01): `login_url`/`sso_url` redacted whole, cut tokens masked,
+  `replaceVars()` with an 8-character minimum, public `redactResponse()`, into
+  `PanelDnsApi.php`.
+
+**Changed here first, still to go back to paneldns-whmcs:**
+- `DriftSync.php`: 404 handling (DRIFT-404-01; there a 404 still terminates).
+- `PanelDnsApi.php`: SSRF resolve-once-and-pin (SSRF-PIN-01, `resolveHost()` seam).
+
+Every module path reads Dedicated IP through `parseId()`; never `(int)`.
 
 build.php copies `shared/*.php` into `modules/servers/paneldnsreseller/lib/` (gitignored)
 and refuses to build if any `require` leaves the module folder. Module code must only

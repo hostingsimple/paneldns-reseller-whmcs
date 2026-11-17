@@ -183,7 +183,7 @@ build.php                              builds dist/paneldns-reseller-whmcs-X.Y.Z
 
 - The API token is stored in WHMCS's encrypted server Access Hash. Module-log entries are
   scrubbed at any depth: passwords, tokens, secrets and keys are replaced by `[REDACTED]`,
-  one-time SSO links lose their `token=`, the secret values are also passed to WHMCS's
+  one-time SSO links are redacted whole (since 1.9.6), the secret values are also passed to WHMCS's
   log masking, `?search=` / `?email=` values are redacted from logged URLs, and zone files
   are logged by size only.
 - Every client-area zone or record action first checks that the zone belongs to the
@@ -210,6 +210,11 @@ build.php                              builds dist/paneldns-reseller-whmcs-X.Y.Z
   PanelDNS answered "not found".
 - **Only named zone packs add zones (v1.9.6).** An addon must be named `PanelDNS +N Zones`;
   the limit is recomputed from the plan and the active packs, not adjusted.
+- **Strict sub-client ids (v1.9.6).** Every nightly job and hook reads the sub-client id
+  from Dedicated IP as a plain whole number only; an IP address there is never read as an
+  id (`203.0.113.5` is not sub-client 203).
+- **SSO links stay out of the module log (v1.9.6).** An SSO answer's `login_url` is
+  redacted whole, and every token cut from a log entry is also masked by WHMCS.
 - **No account linking by email (v1.9.4).** WHMCS does not verify client email addresses,
   so a service is linked only to the sub-client id PanelDNS issued for it, kept in the
   service's admin-only Dedicated IP field. SSO, suspend, terminate and the embedded DNS

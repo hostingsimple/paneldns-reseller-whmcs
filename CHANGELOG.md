@@ -25,8 +25,12 @@ WHMCS is now the source of truth for a service's status:
   Suspended service Terminated.
 - Suspended in WHMCS but active in PanelDNS re-suspends the sub-client in PanelDNS. The
   WHMCS service is not touched.
-- Pending (or any other status) in WHMCS but active in PanelDNS is written to the Activity
-  Log for you to review. Nothing is changed.
+- Any other difference, such as a Pending or Completed service whose sub-client is active,
+  suspended or cancelled, is written to the Activity Log as "drift reported, not applied"
+  for you to review. Nothing is changed. The sync never writes Active.
+- A PanelDNS rate limit (HTTP 429) stops the run; the next night carries on.
+- The policy is the same as paneldns-whmcs 1.1.4's (DRIFT-TRUTH-01), except that a "not
+  found" never terminates here (below).
 - A sub-client that PanelDNS cannot find no longer terminates the service. The service is
   logged and marked `[paneldns-drift:not-found]` in its admin notes for review.
 - If most lookups on a server (three or more) come back "not found", or PanelDNS refuses
@@ -133,6 +137,45 @@ wrong one. Now only services with **Auto-Create** (or **Auto-Delete**) ticked co
 client has one, it is used. If they have several, the one ordered together with the domain
 is used. If none or more than one matches, nothing happens and the Activity Log says why.
 
+### Security — a Dedicated IP that is not an id is never read as one (ID-STRICT-01)
+
+The sub-client id lives in the service's **Dedicated IP** field, which WHMCS treats as an
+IP address. The nightly jobs and hooks read it with a loose number conversion, so an
+address such as `203.0.113.5` there became sub-client **203**, another customer's. The
+grace-period job could delete that sub-client (and now its zones), a profile change could
+rename it, domain auto-create could add a zone under it, and the drift sync could copy its
+status. Every path now accepts only a plain positive whole number. Anything else is
+skipped, and the grace-period job keeps its marker and logs the service for you to check.
+Ported from paneldns-whmcs 1.1.4, which fixed the same problem.
+
+### Security — SSO login links never reach the module log (LOG-REDACT-01)
+
+Since 1.9.3 the module log already redacted secrets at any depth and masked their values.
+An SSO answer's `login_url` kept its address, with only the one-time token cut out. In line
+with paneldns-whmcs 1.1.4:
+
+- `login_url` and `sso_url` values are now redacted whole.
+- A token cut out of any text, such as an error page, is also handed to WHMCS to mask
+  wherever it appears.
+- Values shorter than 8 characters are no longer used for masking, because masking every
+  occurrence of a short string garbles the log entry. They are still redacted by key.
+- A response that cannot be re-encoded is not logged at all.
+
+The module still receives the real link.
+
+### Shared code — kept in step with paneldns-whmcs 1.1.4
+
+`shared/DriftSync.php` and `shared/PanelDnsApi.php` are twins of paneldns-whmcs's files.
+This release ports that module's 1.1.4 changes into them, keeping this module's class
+names:
+
+- Strict ids: from paneldns-whmcs 99bf546.
+- Drift policy: from 8192eab. The 404 handling differs on purpose (see above).
+- Log redaction: from f526b01.
+
+paneldns-whmcs does not have the SSRF address pinning or the drift sync's 404 handling
+added here.
+
 ### Upgrade notes
 
 - **Rename zone-pack addons.** Only addons named `PanelDNS +N Zones` add zones now.
@@ -144,8 +187,12 @@ is used. If none or more than one matches, nothing happens and the Activity Log 
   area. Account owners are not affected. Owners grant it under **Account → User
   Management**.
 - After the first nightly run, search service notes for `[paneldns-drift:not-found]` and
-  the Activity Log for `drift sync`. Before 1.9.6, those services would have been
-  terminated.
+  the Activity Log for `drift sync` and `drift reported, not applied`. Before 1.9.6, those
+  services would have been terminated or re-statused.
+- A service with an IP address (or anything but the sub-client id) in **Dedicated IP**
+  is now skipped by every nightly job and hook. If the Activity Log says a grace-period
+  service's "Dedicated IP is not a sub-client id", put the right id in or remove the
+  `[paneldns-grace:…]` marker from its notes.
 - No database changes.
 
 ---
