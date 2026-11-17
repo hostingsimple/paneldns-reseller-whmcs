@@ -631,7 +631,8 @@ class PanelDnsResellerService
             }
             $resp = $svc->api->mintSubClientSsoToken($id);
             if (!$resp['ok'] || empty($resp['data']['login_url'])) {
-                return ['success' => false, 'errorMsg' => $resp['error'] ?? 'SSO token mint failed.'];
+                // ERR-LEAK-01 (v1.9.6): the client sees this; no 0/5xx detail.
+                return ['success' => false, 'errorMsg' => PanelDnsEmbeddedDnsManager::clientError($resp, 'SSO token mint failed.', 'clientSso')];
             }
             // SSO-REDIRECT-01 (v1.9.3): WHMCS reads the target from 'redirectTo'
             // (developers.whmcs.com/provisioning-modules/single-sign-on/). Up to 1.9.2 this

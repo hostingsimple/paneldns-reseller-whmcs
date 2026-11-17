@@ -42,6 +42,12 @@ class PanelDnsEmbeddedDnsManager
     const MSG_CHECK_FAILED = 'Could not check this zone name right now. Please try again in a few minutes.';
 
     /**
+     * ERR-LEAK-01 (v1.9.6): what a client sees when PanelDNS, or the DNS server behind it,
+     * failed (no answer, or HTTP 5xx). The detail goes to the module log.
+     */
+    const MSG_SERVER_ERROR = 'The DNS server could not complete this request. Please try again later.';
+
+    /**
      * IMPORT-01: PanelDNS validates zone_file as max:51200 (characters). Capped here in
      * bytes, which is never more permissive.
      */
@@ -146,7 +152,7 @@ class PanelDnsEmbeddedDnsManager
                 'zones'           => $resp['data'],
                 'zones_total'     => (int) ($resp['total'] ?? count($resp['data'])),
                 'zones_truncated' => !empty($resp['truncated']),
-                'error'           => $resp['ok'] ? null : ($resp['error'] ?? 'Failed to load zones'),
+                'error'           => $resp['ok'] ? null : $this->apiError($resp, 'Failed to load zones'),
                 'service_id'      => (int) $this->params['serviceid'],
                 'flash'           => $this->popFlash(),
                 'csrf'            => $this->csrfToken(),
@@ -184,7 +190,7 @@ class PanelDnsEmbeddedDnsManager
             'vars' => [
                 'zone'           => $zone,
                 'records'        => $records['data'],
-                'error'          => $records['ok'] ? null : ($records['error'] ?? 'Failed to load records'),
+                'error'          => $records['ok'] ? null : $this->apiError($records, 'Failed to load records'),
                 'service_id'     => (int) $this->params['serviceid'],
                 'flash'          => $this->popFlash(),
                 'csrf'           => $this->csrfToken(),
@@ -384,7 +390,7 @@ class PanelDnsEmbeddedDnsManager
     {
         $status = (int) ($resp['status'] ?? 0);
         if ($status === 409 || ($status === 422 && self::isNameConflict($resp))) {
-            $this->logZoneRefusal($name, 'PanelDNS HTTP ' . $status . ': ' . $this->apiError($resp, '(no message)'));
+            $this->logZoneRefusal($name, 'PanelDNS HTTP ' . $status . ': ' . $this->rawError($resp, '(no message)'));
             return self::MSG_UNAVAILABLE;
         }
         return $this->apiError($resp, 'Failed to create zone.');
@@ -828,8 +834,38 @@ class PanelDnsEmbeddedDnsManager
     /** FIX-M17: extract and cap API error strings before use in flash messages. */
     private function apiError(array $resp, string $fallback = 'unknown'): string
     {
+        return self::clientError($resp, $fallback, 'embedded:service#' . (int) ($this->params['serviceid'] ?? 0));
+    }
+
+    /** The PanelDNS error text, capped — for the admin's logs only. */
+    private function rawError(array $resp, string $fallback = 'unknown'): string
+    {
         $e = (string) ($resp['error'] ?? '');
         return substr($e !== '' ? $e : $fallback, 0, 256);
+    }
+
+    /**
+     * ERR-LEAK-01 (v1.9.6): the text a CLIENT may see for a failed PanelDNS call.
+     *
+     * No answer (status 0) or HTTP 5xx: MSG_SERVER_ERROR, with the detail written to the
+     * module log. PanelDNS passes DNS-provider exception text through on those (zone
+     * export and import answer 502 with the provider's message), which can name internal
+     * hosts, paths and provider responses. Up to 1.9.5 it reached the client verbatim.
+     * A 4xx — validation, quota, a rate limit — is PanelDNS's own wording and is shown.
+     *
+     * @internal public for unit tests; also used for the client SSO error.
+     */
+    public static function clientError(array $resp, string $fallback, string $context = 'client'): string
+    {
+        $status = (int) ($resp['status'] ?? 0);
+        $detail = (string) ($resp['error'] ?? '');
+        if ($status === 0 || $status >= 500) {
+            if (function_exists('logModuleCall')) {
+                logModuleCall('paneldnsreseller', 'client-error:' . $context, ['status' => $status], substr($detail, 0, 1000), '');
+            }
+            return self::MSG_SERVER_ERROR;
+        }
+        return substr($detail !== '' ? $detail : $fallback, 0, 256);
     }
 
     private function popFlash(): ?array
