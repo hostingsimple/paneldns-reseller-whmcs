@@ -56,6 +56,7 @@ if (!defined('WHMCS')) {
 }
 
 require_once __DIR__ . '/PanelDnsApi.php';
+require_once __DIR__ . '/DriftSync.php'; // ID-STRICT-01: parseId()
 
 class PanelDnsResellerHooks
 {
@@ -222,7 +223,7 @@ class PanelDnsResellerHooks
             if (!$service) {
                 return;
             }
-            $subClientId = (int) $service->sub_client_id;
+            $subClientId = (int) self::parseId($service->sub_client_id); // serviceForDomain() kept only ids
 
             if ($action === 'create' && !self::domainIsTheClients($userId, $domain, $transferCompleted)) {
                 logActivity("PanelDNS: auto-create zone {$domain} skipped for client #{$userId}"
@@ -285,7 +286,8 @@ class PanelDnsResellerHooks
         // yesno module config options store 'on' when ticked ('' when not).
         $candidates = array_values(array_filter(
             $services,
-            fn (object $s) => (int) ($s->sub_client_id ?? 0) > 0 && self::isYes($s->{$option} ?? '')
+            // ID-STRICT-01: only a plain id in Dedicated IP makes a service a candidate.
+            fn (object $s) => self::parseId($s->sub_client_id ?? null) !== null && self::isYes($s->{$option} ?? '')
         ));
         if (count($candidates) <= 1) {
             return $candidates[0] ?? null;
@@ -319,6 +321,18 @@ class PanelDnsResellerHooks
             if (is_string($u) && $u !== '') $names[] = mb_strtolower($u);
         }
         return array_values(array_unique($names));
+    }
+
+    /**
+     * ID-STRICT-01 (v1.9.6, ported from paneldns-whmcs 1.1.4): the sub-client id stored in
+     * a service's Dedicated IP, or null when the value is not one. Dedicated IP is WHMCS's
+     * IP-address field, and `(int) '203.0.113.5'` is 203: the grace cron would delete,
+     * ClientEdit rename and domain auto-create add a zone under another customer's
+     * sub-client. One rule for every path: PanelDnsResellerDriftSync::parseId().
+     */
+    public static function parseId($v): ?int
+    {
+        return PanelDnsResellerDriftSync::parseId($v);
     }
 
     /**
@@ -427,8 +441,8 @@ class PanelDnsResellerHooks
                 return;
             }
 
-            $subClientId = (int) $service->sub_client_id;
-            if ($subClientId <= 0) {
+            // ID-STRICT-01 (v1.9.6): only a plain id in Dedicated IP.
+            if (self::parseId($service->sub_client_id ?? null) === null) {
                 return;
             }
 
@@ -493,8 +507,9 @@ class PanelDnsResellerHooks
                 ->get();
 
             foreach ($services as $service) {
-                $subClientId = (int) $service->sub_client_id;
-                if ($subClientId <= 0) continue;
+                // ID-STRICT-01 (v1.9.6): '203.0.113.5' must not rename sub-client 203.
+                $subClientId = self::parseId($service->sub_client_id ?? null);
+                if ($subClientId === null) continue;
                 $resp = self::apiForServer($service)->patchSubClient($subClientId, $patch);
                 if (!($resp['ok'] ?? false)) {
                     logActivity('PanelDNS client sync failed for sub-client ' . $subClientId . ': '
@@ -561,8 +576,16 @@ class PanelDnsResellerHooks
                 $deadline = self::graceDeadline((string) $svc->notes);
                 if ($deadline === null || $deadline > $today) continue; // no marker / not yet expired
 
-                $subClientId = (int) $svc->sub_client_id;
+                // ID-STRICT-01 (v1.9.6): a value that is not a plain id (an IP address in
+                // Dedicated IP) deletes nothing and keeps the marker for an admin. An empty
+                // value still just clears the marker.
+                $subClientId = (int) self::parseId($svc->sub_client_id ?? null);
                 $zones       = ['deleted' => 0];
+                if ($subClientId === 0 && trim((string) ($svc->sub_client_id ?? '')) !== '') {
+                    logActivity("PanelDNS: grace period expired for service #{$svc->service_id}, but its Dedicated IP is not"
+                        . ' a sub-client id. Nothing was deleted; the grace marker is kept for you to check the service.');
+                    continue;
+                }
 
                 // NO-EMAIL-LINK-02 (v1.9.4): CreateAccount no longer re-links a re-order to
                 // the client's old sub-client, so that is now an admin step (Dedicated IP +
