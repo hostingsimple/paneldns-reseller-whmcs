@@ -713,6 +713,7 @@ class PanelDnsResellerHooks
 
         // SEC-H7: SSRF pre-flight — validate server hostname before building the API client.
         // This path bypasses __construct() and constructs PanelDnsResellerApi directly.
+        // A fail-fast only: the enforcing check is the client's pinned pre-flight (SSRF-PIN-01).
         $hookResolved = gethostbyname($service->server_hostname);
         if (filter_var($hookResolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
             throw new \RuntimeException('paneldnsreseller: server hostname resolves to a private/reserved IP address.');

@@ -79,6 +79,8 @@ class PanelDnsResellerService
         $hostname = $params['serverhostname'] ?? 'localhost';
 
         // FIX-H4 / SEC-H7: SSRF pre-flight — reject hostnames that resolve to private/reserved IPs.
+        // A fail-fast only: the enforcing check is PanelDnsResellerApi's resolve-once-and-pin
+        // before each request (SSRF-PIN-01), since this answer can differ from cURL's.
         $resolved = gethostbyname($hostname);
         if (
             filter_var($resolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false

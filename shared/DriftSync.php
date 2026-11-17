@@ -215,7 +215,8 @@ class PanelDnsResellerDriftSync
             $api = (self::$apiFactory)($serverParams, $row);
         } else {
             // SEC-H7: SSRF pre-flight — PanelDnsResellerDriftSync builds PanelDnsResellerApi directly (no __construct() guard),
-            // so we validate the hostname here before making the connection.
+            // so we validate the hostname here before making the connection. A fail-fast
+            // only: the enforcing check is the client's pinned pre-flight (SSRF-PIN-01).
             $driftHost     = $serverParams['serverhostname'];
             $driftResolved = gethostbyname($driftHost);
             if (filter_var($driftResolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
