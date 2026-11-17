@@ -81,7 +81,12 @@ final class ZoneOwnershipTest extends TestCase
     {
         Capsule::$handler = function (FakeQuery $q, string $op) use ($domains, $service) {
             if ($q->baseTable() === 'tblhosting') {
-                return $op === 'first' ? $service : null;
+                // DOMAIN-SVC-01 (v1.9.6): the domain hooks list the client's services.
+                return match ($op) {
+                    'get'   => $service ? [$service] : [],
+                    'first' => $service,
+                    default => null,
+                };
             }
             if ($q->baseTable() !== 'tbldomains') return null;
             $rows = array_values(array_filter($domains, function (object $d) use ($q) {

@@ -99,6 +99,19 @@ If the email is missing: verify the template exists at
 1. On the same product page, click **Open full DNS Portal**
 2. ✅ Expected: browser redirects to PanelDNS portal authenticated as the test client
 
+## 8b — User permissions (v1.9.6)
+
+1. As the test client, invite a second user under **Account → User Management** with
+   **View Products & Services** but without **Perform Single Sign-On**, and accept the
+   invitation
+2. Sign in as that user and open the DNS product
+3. ✅ Expected: the overview shows usage and nameservers but no **Manage DNS Zones** or
+   **Open full DNS Portal** button. Opening `…&customAction=zones` or
+   `…&customAction=sso` directly shows "Your user account does not have permission to
+   manage DNS for this service."
+4. Grant the user **Perform Single Sign-On** and reload
+5. ✅ Expected: both buttons appear and work
+
 ---
 
 ## 9 — Resend Welcome Email
@@ -123,6 +136,14 @@ If the email is missing: verify the template exists at
    ("Overdue on Payment"), then mark that invoice paid
 8. ✅ Expected: WHMCS unsuspends the service at once, the Module Log shows
    `UnsuspendAccount`, and the sub-client returns to "active"
+9. While the service is Suspended, open its product page in the client area
+10. ✅ Expected (v1.9.6): "DNS management is not available while this service is
+    Suspended."; no DNS buttons; `…&customAction=zones` shows the same notice
+11. Suspend the service, then set the sub-client to **active** in the PanelDNS dashboard
+    and run the WHMCS cron (`php -q crons/cron.php` with the daily jobs)
+12. ✅ Expected (v1.9.6): the service stays **Suspended** in WHMCS, the sub-client is
+    "suspended" again in PanelDNS, and the Activity Log has `drift fixed: sub-client
+    suspended again in PanelDNS`. Unsuspend the service afterwards
 
 ---
 
@@ -215,10 +236,14 @@ Tick the option on the product, then, with a second test client whose service ha
 
 ## 14 — Terminate
 
-1. Terminate the test service in WHMCS Admin
-2. If grace period = 0: ✅ Expected: sub-client deleted from PanelDNS immediately
-3. If grace period > 0: ✅ Expected: sub-client shows "suspended" in PanelDNS; deleted
-   after the nightly cron passes the deadline
+1. Make sure the test sub-client still has at least one zone, then terminate the test
+   service in WHMCS Admin
+2. If grace period = 0: ✅ Expected: the sub-client's zones are deleted, then the
+   sub-client, immediately. The PanelDNS dashboard shows none of its zones left as
+   org-level zones (v1.9.6)
+3. If grace period > 0: ✅ Expected: sub-client shows "suspended" in PanelDNS (its zones
+   still resolve); the zones and then the sub-client are deleted after the nightly cron
+   passes the deadline
 
 ---
 
@@ -230,3 +255,4 @@ and filter by module name `paneldns`:
 - ✅ No unexpected errors
 - ✅ API calls show redacted Authorization headers (no raw token in logs)
 - ✅ `?search=` parameters show `[REDACTED]` (not raw email addresses)
+- ✅ `sso-token` entries show `"login_url":"[REDACTED]"` — no `/sso/consume` link (v1.9.6)

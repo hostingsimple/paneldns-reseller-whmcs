@@ -27,10 +27,12 @@ if (!function_exists('logActivity')) {
 }
 
 if (!function_exists('localAPI')) {
+    /** Records the call; a test can answer it with $GLOBALS['__local_api_handler']($command, $vars). */
     function localAPI(string $command, array $vars = []): array
     {
         $GLOBALS['__local_api'][] = [$command, $vars];
-        return ['result' => 'success'];
+        $handler = $GLOBALS['__local_api_handler'] ?? null;
+        return $handler instanceof \Closure ? $handler($command, $vars) : ['result' => 'success'];
     }
 }
 
@@ -60,6 +62,7 @@ if (!function_exists('add_hook')) {
 }
 
 require __DIR__ . '/Support/FakeCapsule.php';
+require __DIR__ . '/Support/FakeWhmcsAuth.php'; // WHMCS-PERM-01: CurrentUser
 
 // The embedded manager starts a PHP session if none is active (WHMCS always has one).
 // Start an in-memory one up front, as WHMCS would have, so tests can set $_SESSION

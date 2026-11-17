@@ -22,35 +22,7 @@ final class PanelDnsResellerHooksTest extends TestCase
         PanelDnsResellerHooks::$apiFactory = null;
     }
 
-    // ── Addon zone count parsing ───────────────────────────────────────────────
-
-    /**
-     * The regex that parses extra zones from an addon name is inline in
-     * onAddonChange(). We test the exact pattern here to guard against regressions.
-     *
-     * @dataProvider addonNameProvider
-     */
-    public function test_addon_zone_count_regex(string $name, int $expectedZones): void
-    {
-        preg_match('/\+?\s*(\d+)\s*zone/i', $name, $m);
-        $parsed = isset($m[1]) ? (int) $m[1] : 5;
-        $this->assertSame($expectedZones, $parsed, "Addon name: '{$name}'");
-    }
-
-    public static function addonNameProvider(): array
-    {
-        return [
-            'standard format'       => ['PanelDNS +10 Zones',   10],
-            'no plus sign'          => ['PanelDNS 10 Zones',     10],
-            'lowercase'             => ['paneldns +5 zone',       5],
-            'extra whitespace'      => ['PanelDNS +  25  zones', 25],
-            'zone singular'         => ['DNS +1 Zone',            1],
-            'large number'          => ['PanelDNS +100 Zones',  100],
-            'no number — fallback'  => ['PanelDNS Zone Pack',     5],
-            'number not near zone'  => ['3 Extras DNS Pack',       5], // "zone" not present
-            'number before word'    => ['50 Zones Addon',         50],
-        ];
-    }
+    // Addon zone-pack names: AddonZonePackTest (ADDON-ZONES-01, v1.9.6).
 
     // ── Grace marker helpers ───────────────────────────────────────────────────
 
@@ -122,7 +94,10 @@ final class PanelDnsResellerHooksTest extends TestCase
     /** Runs the cron against one row, with DELETE answering $deleteResponse. */
     private function runGraceCron(object $row, array $deleteResponse): FakeApi
     {
-        $api = (new FakeApi())->on('DELETE', '/api/v1/sub-clients/' . (int) $row->sub_client_id, $deleteResponse);
+        $api = (new FakeApi())
+            // TERM-ZONES-01 (v1.9.6): the cron lists (and deletes) the zones first; none here.
+            ->on('GET', '/api/v1/zones', FakeApi::json(200, ['ok' => true, 'data' => [], 'meta' => ['page' => 1, 'per_page' => 50, 'total' => 0]]))
+            ->on('DELETE', '/api/v1/sub-clients/' . (int) $row->sub_client_id, $deleteResponse);
         PanelDnsResellerHooks::$apiFactory = fn () => $api;
         Capsule::$handler = fn (FakeQuery $q, string $op) => $op === 'get' ? [$row] : null;
 
@@ -248,10 +223,11 @@ final class PanelDnsResellerHooksTest extends TestCase
         });
         $api->on('DELETE', '/api/v1/zones/52', FakeApi::json(200, ['ok' => true, 'data' => null]));
         PanelDnsResellerHooks::$apiFactory = fn () => $api;
-        Capsule::$handler = fn (FakeQuery $q, string $op) => $op === 'first' ? (object) [
-            'service_id' => 1, 'sub_client_id' => '42', 'server_hostname' => 'paneldns.test', 'server_key' => 'k',
+        // DOMAIN-SVC-01 (v1.9.6): the hook lists the client's services (one here).
+        Capsule::$handler = fn (FakeQuery $q, string $op) => $op === 'get' && $q->baseTable() === 'tblhosting' ? [(object) [
+            'service_id' => 1, 'order_id' => 0, 'sub_client_id' => '42', 'server_hostname' => 'paneldns.test', 'server_key' => 'k',
             'server_secure' => 1, 'server_port' => 443, 'auto_create' => 'on', 'auto_delete' => 'on',
-        ] : null;
+        ]] : null;
 
         PanelDnsResellerHooks::onDomainEvent(7, 'Example.com', 'delete');
 

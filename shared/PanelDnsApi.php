@@ -15,6 +15,9 @@ if (!defined('WHMCS')) { die('Access denied.'); }
  *   - No Composer, no namespaces (lives in shared/, copied into lib/ by build.php).
  *   - cURL only (no Guzzle).
  *   - IPv4 only (CURLOPT_IPRESOLVE_V4) — SSRF guard, matches dns-whmcs.
+ *   - SSRF-PIN-01 (v1.9.6): the host is resolved once per client, a private/reserved
+ *     address is refused before anything is sent, and cURL is pinned to the checked
+ *     address with CURLOPT_RESOLVE (SNI and certificate checks stay on the hostname).
  *   - TLS verify ON by default; per-server tls_verify flag honoured.
  *   - Returns ['ok' => bool, 'status' => int, 'data' => array|null, 'meta' => array|null,
  *     'error' => string|null, 'retry_after' => int|null, 'raw_body' => string|null].
@@ -55,6 +58,22 @@ class PanelDnsResellerApi
      * @var array<string,int>
      */
     private static $blockedUntil = [];
+
+    /**
+     * SSRF-PIN-01: host => the IPv4 address every request of this client connects to,
+     * resolved and checked once.
+     *
+     * @var array<string,string>
+     */
+    private $pinned = [];
+
+    /**
+     * SSRF-PIN-01: the checked target of the request in flight (host, port, ip), which
+     * transport() hands to cURL. Protected so the test double can record it.
+     *
+     * @var null|array{host:string, port:int, ip:string}
+     */
+    protected $pin = null;
 
     public function __construct(string $baseUrl, string $apiKey, string $mode, bool $tlsVerify = true)
     {
@@ -416,7 +435,27 @@ class PanelDnsResellerApi
             ];
         }
 
-        $res = $this->transport($method, $url, $body);
+        // SSRF-PIN-01 (v1.9.6): resolve the host once, refuse a private or reserved address,
+        // and pin that address for cURL — all before anything is sent. Up to 1.9.5 the
+        // callers checked gethostbyname() and cURL then resolved the name again, so a
+        // short-TTL record could pass the check and point the request (and its Bearer
+        // token) at an internal address; the private-IP check here ran only after cURL had
+        // sent the request.
+        $target = $this->pinTarget($url);
+        if (isset($target['error'])) {
+            $this->logCall($method, $url, $body, 0, null, $target['error']);
+            return [
+                'ok' => false, 'status' => 0, 'data' => null, 'meta' => null, 'errors' => [],
+                'error' => $target['error'], 'retry_after' => null, 'raw_body' => null,
+            ];
+        }
+
+        $this->pin = $target;
+        try {
+            $res = $this->transport($method, $url, $body);
+        } finally {
+            $this->pin = null;
+        }
         $status = (int) ($res['status'] ?? 0);
         $raw    = $res['body'] ?? null;
         $err    = (string) ($res['curl_error'] ?? '');
@@ -435,8 +474,9 @@ class PanelDnsResellerApi
             ];
         }
 
-        // SEC-L02: belt-and-braces SSRF guard — block responses that resolved to a
-        // private/loopback IPv4 range even when CURLOPT_IPRESOLVE_V4 is set.
+        // SEC-L02: belt-and-braces — discard a response that still came from a private
+        // address (e.g. through a proxy). This runs after the request was sent, so it is
+        // not the guard: the pinned pre-flight above is (SSRF-PIN-01).
         $primaryIp = (string) ($res['primary_ip'] ?? '');
         if ($primaryIp !== '' && self::isPrivateIp($primaryIp)) {
             return [
@@ -507,6 +547,13 @@ class PanelDnsResellerApi
             },
         ];
 
+        // SSRF-PIN-01: connect to the address request() checked. The URL keeps the
+        // hostname, so SNI and certificate verification still use the hostname.
+        $resolve = $this->pin !== null ? self::curlResolveEntry($this->pin) : null;
+        if ($resolve !== null) {
+            $opts[CURLOPT_RESOLVE] = [$resolve];
+        }
+
         if ($body !== null) {
             $opts[CURLOPT_POSTFIELDS] = json_encode($body, JSON_UNESCAPED_SLASHES);
             $headers[] = 'Content-Type: application/json';
@@ -527,6 +574,78 @@ class PanelDnsResellerApi
             'curl_errno' => (int) curl_errno($ch),
             'primary_ip' => (string) curl_getinfo($ch, CURLINFO_PRIMARY_IP),
         ];
+    }
+
+    /**
+     * SSRF-PIN-01 (v1.9.6): the address a request to $url will connect to, checked before
+     * anything is sent. The host is resolved once per client (later requests, such as the
+     * next page of a listing, reuse the pin, so the name cannot be re-pointed between
+     * them). IPv4 only, like CURLOPT_IPRESOLVE_V4.
+     *
+     * @return array{host:string, port:int, ip:string}|array{error:string}
+     */
+    private function pinTarget(string $url): array
+    {
+        $parts  = parse_url($url);
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host   = strtolower((string) ($parts['host'] ?? ''));
+        if ($host === '' || !in_array($scheme, ['http', 'https'], true)) {
+            return ['error' => 'SSRF guard: not an http(s) URL with a host'];
+        }
+        $port = (int) ($parts['port'] ?? ($scheme === 'https' ? 443 : 80));
+
+        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+            $ip = $host;
+        } elseif (str_starts_with($host, '[')) {
+            return ['error' => 'SSRF guard: IPv6 addresses are not supported'];
+        } else {
+            $ip = $this->pinned[$host] ?? null;
+            if ($ip === null) {
+                foreach ($this->resolveHost($host) as $candidate) {
+                    if (filter_var($candidate, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+                        $ip = $candidate;
+                        break;
+                    }
+                }
+            }
+            if ($ip === null) {
+                return ['error' => 'Could not resolve the PanelDNS server hostname. See the module log for details.'];
+            }
+        }
+
+        if (self::isPrivateIp($ip)
+            || filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            return ['error' => 'SSRF guard: target resolved to a private IP address'];
+        }
+
+        $this->pinned[$host] = $ip;
+        return ['host' => $host, 'port' => $port, 'ip' => $ip];
+    }
+
+    /**
+     * SSRF-PIN-01: the host's IPv4 addresses. Isolated so tests can substitute a resolver.
+     *
+     * @return string[]
+     */
+    protected function resolveHost(string $host): array
+    {
+        $ips = gethostbynamel($host);
+        return is_array($ips) ? $ips : [];
+    }
+
+    /**
+     * SSRF-PIN-01: the CURLOPT_RESOLVE entry ("host:port:ip") for a checked target, or
+     * null when the URL already names the IP.
+     *
+     * @param array{host:string, port:int, ip:string} $target
+     * @internal public for unit tests.
+     */
+    public static function curlResolveEntry(array $target): ?string
+    {
+        if (filter_var($target['host'], FILTER_VALIDATE_IP) !== false) {
+            return null;
+        }
+        return $target['host'] . ':' . (int) $target['port'] . ':' . $target['ip'];
     }
 
     /**
@@ -565,12 +684,12 @@ class PanelDnsResellerApi
         // literal strings it is given, so it masked those words and no secret at all.
         // It now receives the secret VALUES: the API key plus every value found under a
         // secret-looking key.
+        // LOG-REDACT-01 (v1.9.6, ported from paneldns-whmcs 1.1.4): login_url / sso_url
+        // values are redacted whole (they ARE the login), a token cut from any string is
+        // masked too, and short values are not used as replace vars.
         $secrets = [];
         $request  = self::scrub($body ?? [], $secrets);
-        $response = self::scrubResponse($rawResponse, $secrets);
-        if ($this->apiKey !== '') {
-            $secrets[] = $this->apiKey;
-        }
+        $response = self::redactResponse($rawResponse, $secrets);
 
         logModuleCall(
             'paneldns',
@@ -579,12 +698,41 @@ class PanelDnsResellerApi
             $request,
             ['status' => $status, 'response' => $this->truncate($response, 4096), 'curl_error' => $curlError],
             null,
-            array_values(array_unique(array_filter($secrets, fn ($s) => is_string($s) && strlen($s) >= 4)))
+            $this->replaceVars($secrets)
         );
     }
 
-    /** Keys whose values are never logged, at any depth. */
-    const SECRET_KEY_PATTERN = '/pass(?:word|phrase)?|secret|token|api[_-]?key|authori[sz]ation|access[_-]?hash|private[_-]?key/i';
+    /**
+     * LOG-REDACT-01: shortest secret passed to logModuleCall() as a replace var. Shorter
+     * values are already redacted by key; masking every occurrence of a short string
+     * would mangle the rest of the log entry.
+     */
+    const MIN_REPLACE_VAR_LENGTH = 8;
+
+    /**
+     * LOG-SCRUB-01 / LOG-REDACT-01: logModuleCall()'s 6th argument is "an array of strings
+     * for replacement": the secret VALUES WHMCS masks wherever they appear in the entry
+     * (developers.whmcs.com/provisioning-modules/module-logging) — the API key plus every
+     * value scrub()/redactResponse() removed. Never key names.
+     *
+     * @param list<mixed> $secrets
+     * @return list<string>
+     */
+    private function replaceVars(array $secrets): array
+    {
+        $vars = [];
+        foreach (array_merge([$this->apiKey], $secrets) as $v) {
+            if (is_string($v) && strlen($v) >= self::MIN_REPLACE_VAR_LENGTH) $vars[$v] = true;
+        }
+        return array_keys($vars);
+    }
+
+    /**
+     * Keys whose values are never logged, at any depth. LOG-REDACT-01 (v1.9.6): also
+     * login_url / sso_url — POST /sub-clients/{id}/sso-token's `/sso/consume?token=…` is a
+     * live portal login for 60 seconds, so the whole URL goes, not only its token.
+     */
+    const SECRET_KEY_PATTERN = '/pass(?:word|phrase)?|secret|token|api[_-]?key|authori[sz]ation|access[_-]?hash|private[_-]?key|login[_-]?url|sso[_-]?url/i';
 
     /**
      * LOG-SCRUB-01: a copy of $data with every secret-looking key's value replaced by
@@ -599,8 +747,17 @@ class PanelDnsResellerApi
             $out = [];
             foreach ($data as $k => $v) {
                 if (is_string($k) && preg_match(self::SECRET_KEY_PATTERN, $k)) {
-                    if (is_string($v) && $v !== '') {
-                        $found[] = $v;
+                    // LOG-REDACT-01: every string under the key (a list of tokens too), and a
+                    // login URL's token on its own, in case WHMCS logs it elsewhere.
+                    $values = is_array($v) ? [] : [$v];
+                    if (is_array($v)) {
+                        array_walk_recursive($v, function ($leaf) use (&$values) { $values[] = $leaf; });
+                    }
+                    foreach ($values as $value) {
+                        if (!is_string($value) || $value === '') continue;
+                        $found[] = $value;
+                        parse_str((string) parse_url($value, PHP_URL_QUERY), $q);
+                        if (is_string($q['token'] ?? null) && $q['token'] !== '') $found[] = $q['token'];
                     }
                     $out[$k] = '[REDACTED]';
                 } elseif ($k === 'zone_file' && is_string($v)) {
@@ -612,30 +769,51 @@ class PanelDnsResellerApi
             }
             return $out;
         }
-        return is_string($data) ? self::scrubString($data) : $data;
+        return is_string($data) ? self::scrubString($data, $found) : $data;
     }
 
-    /** Secret query parameters (?token=…, &password=…) inside any string. */
-    private static function scrubString(string $s): string
+    /**
+     * Secret parameters (token=…, password=…, key=…) anywhere in a string — a query
+     * string, a URL under another key, an HTML error page. LOG-REDACT-01: matched at any
+     * position not inside a longer word (up to 1.9.5 only after ? or &), and every value
+     * cut is added to $found so WHMCS masks it elsewhere too.
+     */
+    private static function scrubString(string $s, array &$found = []): string
     {
-        return (string) preg_replace(
-            '/([?&](?:token|password|secret|api_key|apikey|key)=)[^&"\s\\\\]*/i',
-            '$1[REDACTED]',
+        return (string) preg_replace_callback(
+            '/(?<![A-Za-z0-9_])((?:access_token|api_key|apikey|token|key|password|secret)=)([^&"\'\s<>\\\\]+)/i',
+            static function (array $m) use (&$found): string {
+                if ($m[2] !== '[REDACTED]') {
+                    $found[] = rawurldecode($m[2]);
+                    $found[] = $m[2];
+                }
+                return $m[1] . '[REDACTED]';
+            },
             $s
         );
     }
 
-    /** The raw response with the same scrubbing — decoded and re-encoded when JSON. */
-    private static function scrubResponse(?string $raw, array &$found): ?string
+    /**
+     * LOG-SCRUB-01 / LOG-REDACT-01: the response body as it may be logged. JSON is decoded,
+     * scrubbed and re-encoded; a body that cannot be re-encoded is not logged (never the
+     * raw body — it is what carries the secret). Then secret parameters are cut from
+     * what remains (non-JSON bodies, URLs under other keys). Every value removed is added
+     * to $found.
+     *
+     * @internal public for unit tests.
+     */
+    public static function redactResponse(?string $raw, array &$found = []): ?string
     {
         if ($raw === null || $raw === '') {
             return $raw;
         }
         $decoded = json_decode($raw, true);
         if (is_array($decoded)) {
-            return (string) json_encode(self::scrub($decoded, $found), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $encoded = json_encode(self::scrub($decoded, $found),
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+            return is_string($encoded) ? $encoded : '{"redacted":"response not logged"}';
         }
-        return self::scrubString($raw);
+        return self::scrubString($raw, $found);
     }
 
     private function truncate(?string $s, int $max): ?string

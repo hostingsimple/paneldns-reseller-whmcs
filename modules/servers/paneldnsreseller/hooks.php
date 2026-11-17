@@ -90,19 +90,33 @@ add_hook('DomainDelete', 1, function (array $vars) {
 });
 
 /**
- * ADDON-01: adjust the sub-client zone limit when a product addon is activated
- * (+) or suspended/terminated (-). All three hooks pass 'serviceid' and
- * 'addonid' at the top level; the addon name is resolved from tbladdons.
+ * ADDON-01 / ADDON-ZONES-01 (v1.9.6): re-apply the sub-client's zone limit when a
+ * PanelDNS zone-pack addon ("PanelDNS +N Zones") changes state. The limit is recomputed
+ * from the product limit plus the service's active zone packs, through the module's own
+ * ChangePackage, so the order of events cannot make it drift. Every addon hook passes
+ * 'id' (tblhostingaddons.id), 'serviceid' and 'addonid' at the top level.
+ * https://developers.whmcs.com/hooks-reference/addon/
+ *
+ * Up to 1.9.5 only Activated (+), Suspended (-) and Terminated (-) were hooked, and any
+ * addon counted (5 zones by default).
  */
-add_hook('AddonActivated', 1, function (array $vars) {
-    PanelDnsResellerHooks::onAddonChange((int) ($vars['serviceid'] ?? 0), (int) ($vars['addonid'] ?? 0), +1);
-});
-add_hook('AddonSuspended', 1, function (array $vars) {
-    PanelDnsResellerHooks::onAddonChange((int) ($vars['serviceid'] ?? 0), (int) ($vars['addonid'] ?? 0), -1);
-});
-add_hook('AddonTerminated', 1, function (array $vars) {
-    PanelDnsResellerHooks::onAddonChange((int) ($vars['serviceid'] ?? 0), (int) ($vars['addonid'] ?? 0), -1);
-});
+foreach ([
+    'AddonActivated'   => true,
+    'AddonUnsuspended' => true,
+    'AddonSuspended'   => false,
+    'AddonTerminated'  => false,
+    'AddonCancelled'   => false,
+] as $addonHook => $addonActive) {
+    add_hook($addonHook, 1, function (array $vars) use ($addonActive) {
+        PanelDnsResellerHooks::onAddonChange(
+            (int) ($vars['serviceid'] ?? 0),
+            (int) ($vars['addonid'] ?? 0),
+            (int) ($vars['id'] ?? 0),
+            $addonActive
+        );
+    });
+}
+unset($addonHook, $addonActive);
 
 /**
  * CLIENT-SYNC-01: push WHMCS client name changes to PanelDNS.

@@ -4,6 +4,199 @@ All notable changes to the PanelDNS Reseller WHMCS Module are documented here.
 
 ---
 
+## [1.9.6] — 2026-11-18
+
+Fixes for the Medium and Low findings of the 2026-11-18 PanelDNS security rescan
+(section 08).
+
+### Security — the nightly drift sync no longer lifts WHMCS suspensions (DRIFT-SOT-01, DRIFT-404-01)
+
+The daily drift sync copied the PanelDNS status into WHMCS. Its own description said the
+opposite. A service Suspended in WHMCS (overdue, abuse, a manual hold) became Active the
+night after anyone re-activated its sub-client in PanelDNS. A Pending, unpaid order that had
+a sub-client id became Active. Any "not found" (HTTP 404) answer set the service
+Terminated, so putting another organisation's API token in the server's Access Hash
+terminated every service in WHMCS.
+
+WHMCS is now the source of truth for a service's status:
+
+- Drift is only corrected towards the more restrictive state. Active in WHMCS but suspended
+  in PanelDNS makes the service Suspended. Cancelled in PanelDNS makes an Active or
+  Suspended service Terminated.
+- Suspended in WHMCS but active in PanelDNS re-suspends the sub-client in PanelDNS. The
+  WHMCS service is not touched.
+- Any other difference, such as a Pending or Completed service whose sub-client is active,
+  suspended or cancelled, is written to the Activity Log as "drift reported, not applied"
+  for you to review. Nothing is changed. The sync never writes Active.
+- A PanelDNS rate limit (HTTP 429) stops the run; the next night carries on.
+- The policy is the same as paneldns-whmcs 1.1.4's (DRIFT-TRUTH-01), except that a "not
+  found" never terminates here (below).
+- A sub-client that PanelDNS cannot find no longer terminates the service. The service is
+  logged and marked `[paneldns-drift:not-found]` in its admin notes for review.
+- If most lookups on a server (three or more) come back "not found", or PanelDNS refuses
+  the token (HTTP 401/403), the sync treats it as a token or organisation mistake. It
+  changes and flags nothing on that server, stops calling it for the night, and writes one
+  Activity Log line naming the server.
+
+### Security — only "PanelDNS +N Zones" addons add zones (ADDON-ZONES-01)
+
+Every addon attached to a DNS service changed its zone limit. An addon with no number in
+its name added 5 zones, so a client who ordered any cheap or free addon, again and again,
+got 5 more zones each time. Unsuspending an addon was not handled, so suspending and then
+unsuspending it lost the zones for good. Suspending and then terminating it took them away
+twice. A package change reset the limit to the product's value and wiped every addon grant.
+
+- Only a product addon whose whole name is **`PanelDNS +N Zones`** (for example
+  `PanelDNS +10 Zones`; letter case and spacing are free) adds zones. Any other addon
+  changes nothing. There is no fallback number.
+- The zone limit is worked out again each time, never adjusted: the product's Zone Limit
+  (or the "Zone Limit" Configurable Option) plus the zones of every **active** zone-pack
+  addon on the service. Create, package changes and every addon change (activated,
+  unsuspended, suspended, terminated, cancelled) set the same value. Addon changes run the
+  module's ChangePackage through WHMCS's `ModuleChangePackage` API.
+- A product Zone Limit of 0 ("inherit the org plan") stays 0 when a zone pack is active.
+
+### Security — DNS management follows WHMCS user permissions (WHMCS-PERM-01)
+
+A WHMCS account can have several users, each with their own permissions. WHMCS checks the
+**Perform Single Sign-On** permission before its own "Login to PanelDNS" button works. The
+module's **Open full DNS Portal** button and the embedded DNS manager did not check it:
+anyone who could open the product page got a full portal login and could delete zones,
+including a user the account owner had invited with view-only access.
+
+The portal button and every page and form of the embedded DNS manager now need the
+signed-in user to be the account owner or to have **Perform Single Sign-On** on that
+account. The module checks this with WHMCS's documented `CurrentUser`, `Client::isOwnedBy()`
+and `GetUserPermissions`
+([authentication](https://developers.whmcs.com/advanced/authentication/),
+[GetUserPermissions](https://developers.whmcs.com/api-reference/getuserpermissions/)).
+Other users see the overview (usage and nameservers) without the DNS buttons, and a
+notice if they open a DNS page directly. If the check cannot be made, access is refused.
+
+### Security — DNS management only for an Active service (SVC-STATUS-01)
+
+The client area never looked at the service status. Whether a Suspended, Pending or
+Terminated (grace period) service could still edit DNS depended only on how WHMCS drew the
+page, and PanelDNS refuses changes through your API token only for a suspended zone, not a
+suspended sub-client. The portal button, zone export and every DNS change now need the
+service to be **Active**. Otherwise the client sees the overview with "DNS management is
+not available while this service is Suspended." (or the actual status).
+
+### Security — Terminate deletes the customer's zones (TERM-ZONES-01)
+
+Terminate, and the nightly delete after a grace period, deleted the sub-client and reported
+success. PanelDNS deletes only the sub-client itself. Its zones stay live at the DNS
+provider as zones of your organisation, so a terminated customer's DNS kept resolving
+indefinitely, and the name stayed blocked for whoever registered the domain next.
+
+The module now deletes every zone of the sub-client first, then the sub-client. It lists
+up to 5,000 zones and deletes only zones that belong to that sub-client. If listing or
+deleting a zone fails, the sub-client is kept: Terminate returns an error naming the zone
+(run it again to carry on), and the grace-period job keeps its marker and retries the next
+night. During a grace period the zones keep resolving until the period ends, because
+PanelDNS's API has no way to take a sub-client's zones offline without deleting them.
+
+### Fixed — delete buttons always ask for confirmation (TPL-ATTR-01)
+
+The **Delete** confirmations for a zone and for a record put JSON (with its double quotes)
+inside a double-quoted HTML attribute. The quotes ended the attribute early, the
+confirmation script broke, and the browser deleted at once: one click removed a whole zone.
+The name and record type now travel in an HTML-escaped `data-` attribute that the
+confirmation reads. This also closes an HTML-injection point that only the zone-name
+validation was holding shut.
+
+### Security — no DNS server detail in client error messages (ERR-LEAK-01)
+
+The embedded DNS manager showed clients PanelDNS's error text word for word. For a zone
+export or import, PanelDNS passes on the DNS server's own error (BIND over SSH, the
+PowerDNS API and others), which can name internal hosts, file paths and server responses.
+When PanelDNS does not answer, or answers with a server error (HTTP 5xx), clients now see
+"The DNS server could not complete this request. Please try again later." and the detail
+goes to the module log. PanelDNS's own messages for validation, limits and rate limits
+(HTTP 4xx) are still shown. The same applies to the error of WHMCS's "Login to PanelDNS"
+button.
+
+### Security — the PanelDNS address is checked before anything is sent (SSRF-PIN-01)
+
+The check that stops the module from calling an internal address looked the PanelDNS
+hostname up once, and then cURL looked it up again to connect. A DNS record with a short
+lifetime could pass the check and then point the request, with your API token, at an
+internal address. A second check ran only after the request had been sent.
+
+The API client now looks the hostname up once, refuses a private, loopback, link-local or
+reserved address before sending anything, and makes cURL connect to exactly that address
+(`CURLOPT_RESOLVE`). TLS still checks the certificate against the hostname. Every later
+request of the same run (for example the next page of a list) uses the same address.
+
+### Fixed — domain auto-create with several DNS services (DOMAIN-SVC-01)
+
+Auto-create and auto-delete took "the first" active DNS service of the client, in no
+particular order. A client with DNS services on two PanelDNS servers or reseller accounts
+got the zone in whichever one the database returned, and auto-delete could look in the
+wrong one. Now only services with **Auto-Create** (or **Auto-Delete**) ticked count. If the
+client has one, it is used. If they have several, the one ordered together with the domain
+is used. If none or more than one matches, nothing happens and the Activity Log says why.
+
+### Security — a Dedicated IP that is not an id is never read as one (ID-STRICT-01)
+
+The sub-client id lives in the service's **Dedicated IP** field, which WHMCS treats as an
+IP address. The nightly jobs and hooks read it with a loose number conversion, so an
+address such as `203.0.113.5` there became sub-client **203**, another customer's. The
+grace-period job could delete that sub-client (and now its zones), a profile change could
+rename it, domain auto-create could add a zone under it, and the drift sync could copy its
+status. Every path now accepts only a plain positive whole number. Anything else is
+skipped, and the grace-period job keeps its marker and logs the service for you to check.
+Ported from paneldns-whmcs 1.1.4, which fixed the same problem.
+
+### Security — SSO login links never reach the module log (LOG-REDACT-01)
+
+Since 1.9.3 the module log already redacted secrets at any depth and masked their values.
+An SSO answer's `login_url` kept its address, with only the one-time token cut out. In line
+with paneldns-whmcs 1.1.4:
+
+- `login_url` and `sso_url` values are now redacted whole.
+- A token cut out of any text, such as an error page, is also handed to WHMCS to mask
+  wherever it appears.
+- Values shorter than 8 characters are no longer used for masking, because masking every
+  occurrence of a short string garbles the log entry. They are still redacted by key.
+- A response that cannot be re-encoded is not logged at all.
+
+The module still receives the real link.
+
+### Shared code — kept in step with paneldns-whmcs 1.1.4
+
+`shared/DriftSync.php` and `shared/PanelDnsApi.php` are twins of paneldns-whmcs's files.
+This release ports that module's 1.1.4 changes into them, keeping this module's class
+names:
+
+- Strict ids: from paneldns-whmcs 99bf546.
+- Drift policy: from 8192eab. The 404 handling differs on purpose (see above).
+- Log redaction: from f526b01.
+
+paneldns-whmcs does not have the SSRF address pinning or the drift sync's 404 handling
+added here.
+
+### Upgrade notes
+
+- **Rename zone-pack addons.** Only addons named `PanelDNS +N Zones` add zones now.
+  Rename any other zone-pack addon (for example `Extra 25 Zones` becomes
+  `PanelDNS +25 Zones`) under **Setup → Products/Services → Product Addons**. The next
+  addon change or package change on each service then sets the right limit. Existing limits
+  are not changed by the upgrade itself.
+- **Users of a client account** need **Perform Single Sign-On** to manage DNS in the client
+  area. Account owners are not affected. Owners grant it under **Account → User
+  Management**.
+- After the first nightly run, search service notes for `[paneldns-drift:not-found]` and
+  the Activity Log for `drift sync` and `drift reported, not applied`. Before 1.9.6, those
+  services would have been terminated or re-statused.
+- A service with an IP address (or anything but the sub-client id) in **Dedicated IP**
+  is now skipped by every nightly job and hook. If the Activity Log says a grace-period
+  service's "Dedicated IP is not a sub-client id", put the right id in or remove the
+  `[paneldns-grace:…]` marker from its notes.
+- No database changes.
+
+---
+
 ## [1.9.5] — 2026-11-18
 
 ### Security — a customer can only add zones for their own domains

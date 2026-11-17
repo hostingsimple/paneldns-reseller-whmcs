@@ -15,7 +15,8 @@
  *   - WHMCS Create → POST /api/v1/sub-clients
  *   - WHMCS Suspend → PATCH /api/v1/sub-clients/{id} {status: suspended}
  *   - WHMCS Unsuspend → PATCH … {status: active}
- *   - WHMCS Terminate → DELETE /api/v1/sub-clients/{id}
+ *   - WHMCS Terminate → DELETE /api/v1/zones/{id} for each of its zones, then
+ *     DELETE /api/v1/sub-clients/{id} (TERM-ZONES-01, v1.9.6)
  *   - WHMCS ChangePackage → PATCH … {zone_limit, max_records}
  *   - "Login to PanelDNS Portal" → POST /api/v1/sub-clients/{id}/sso-token → 302
  *
@@ -39,7 +40,7 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '1.9.5');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.9.6');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';

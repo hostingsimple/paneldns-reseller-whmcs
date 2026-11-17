@@ -79,6 +79,8 @@ class PanelDnsResellerService
         $hostname = $params['serverhostname'] ?? 'localhost';
 
         // FIX-H4 / SEC-H7: SSRF pre-flight — reject hostnames that resolve to private/reserved IPs.
+        // A fail-fast only: the enforcing check is PanelDnsResellerApi's resolve-once-and-pin
+        // before each request (SSRF-PIN-01), since this answer can differ from cURL's.
         $resolved = gethostbyname($hostname);
         if (
             filter_var($resolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false
@@ -254,6 +256,15 @@ class PanelDnsResellerService
         $maxRecords = !empty($this->params['configoptions']['Max Records Per Zone'])
             ? (int) $this->params['configoptions']['Max Records Per Zone']
             : (int) ($this->params['configoption2'] ?? 100);
+
+        // ADDON-ZONES-01 (v1.9.6): plus every active "PanelDNS +N Zones" addon on this
+        // service, so CreateAccount, a package upgrade and an addon change all set the same
+        // limit. Up to 1.9.5 ChangePackage reset the limit to the product value and wiped
+        // the addon grants. 0 means "inherit the org plan" (no per-sub-client cap) and
+        // stays 0: adding a pack to it would impose a cap.
+        if ($zoneLimit > 0) {
+            $zoneLimit += PanelDnsResellerHooks::addonZones((int) ($this->params['serviceid'] ?? 0));
+        }
 
         // PanelDNS validates zone_limit 0–10,000 and max_records 0–100,000.
         return [
@@ -537,6 +548,9 @@ class PanelDnsResellerService
             // GRACE-01: suspend instead of delete. DailyCronJob processes the
             // actual deletion once the deadline passes. Terminated WHMCS services
             // are excluded from PanelDnsResellerDriftSync so the suspension is not reversed.
+            // TERM-ZONES-01: the zones are deleted with the sub-client when the period
+            // ends. Until then they keep resolving: the reseller API has no call that
+            // takes a sub-client's zones offline without deleting them.
             $resp = $this->api->patchSubClient($id, ['status' => 'suspended']);
             if (!$resp['ok']) return $resp['error'] ?: 'Grace-period suspend failed.';
 
@@ -550,6 +564,16 @@ class PanelDnsResellerService
                     ->update(['notes' => PanelDnsResellerHooks::withGraceMarker($notes, $deadline)]);
             } catch (\Throwable $e) { /* swallow — grace still applied in PanelDNS */ }
             return 'success';
+        }
+
+        // TERM-ZONES-01 (v1.9.6): delete the sub-client's zones first. PanelDNS deletes only
+        // the sub-client row and keeps its zones live as org-level zones. On a failure the
+        // sub-client is kept, so running Terminate again picks up where this stopped.
+        $zones = PanelDnsResellerHooks::deleteSubClientZones($this->api, $id);
+        if (!$zones['ok']) {
+            return "PanelDNS: sub-client #{$id} was not deleted because {$zones['error']}"
+                . ($zones['deleted'] > 0 ? " ({$zones['deleted']} zone(s) were deleted)" : '')
+                . '. Run Terminate again.';
         }
 
         $resp = $this->api->deleteSubClient($id);
@@ -609,7 +633,8 @@ class PanelDnsResellerService
             }
             $resp = $svc->api->mintSubClientSsoToken($id);
             if (!$resp['ok'] || empty($resp['data']['login_url'])) {
-                return ['success' => false, 'errorMsg' => $resp['error'] ?? 'SSO token mint failed.'];
+                // ERR-LEAK-01 (v1.9.6): the client sees this; no 0/5xx detail.
+                return ['success' => false, 'errorMsg' => PanelDnsEmbeddedDnsManager::clientError($resp, 'SSO token mint failed.', 'clientSso')];
             }
             // SSO-REDIRECT-01 (v1.9.3): WHMCS reads the target from 'redirectTo'
             // (developers.whmcs.com/provisioning-modules/single-sign-on/). Up to 1.9.2 this
@@ -1104,6 +1129,92 @@ class PanelDnsResellerService
         return is_string($a) ? $a : '';
     }
 
+    /**
+     * WHMCS-PERM-01 (v1.9.6): the WHMCS user permission that allows a user to open the
+     * DNS portal and to use the embedded DNS manager: "Perform Single Sign-On"
+     * (`productsso`), the permission WHMCS itself requires for ServiceSingleSignOn. Both
+     * give the same power (the portal can do everything the embedded manager does), so
+     * one permission gates both.
+     */
+    const MANAGE_PERMISSION = 'productsso';
+
+    const MSG_NO_PERMISSION = 'Your user account does not have permission to manage DNS for this service.'
+        . ' The account owner can grant it under Account → User Management (Perform Single Sign-On).';
+
+    /**
+     * WHMCS-PERM-01 (v1.9.6): may the signed-in WHMCS user manage this service's DNS?
+     *
+     * WHMCS 8 accounts can have several users with per-user permissions. WHMCS checks
+     * `productsso` before its own Login button runs ServiceSingleSignOn, but the module's
+     * in-template portal button (?customAction=sso) and the embedded DNS manager ran for
+     * anyone who could open the product page, so a user invited with view-only access got
+     * a full portal login and could delete zones.
+     *
+     * Checked with the documented WHMCS APIs: \WHMCS\Authentication\CurrentUser user() and
+     * client() (https://developers.whmcs.com/advanced/authentication/), Client::isOwnedBy()
+     * (https://developers.whmcs.com/classes/whmcs/user/client/) — the owner holds every
+     * permission — and for any other user localAPI GetUserPermissions(user_id, client_id)
+     * (https://developers.whmcs.com/api-reference/getuserpermissions/), whose permission
+     * names are those of GetPermissionsList. Fails closed: no user, another client
+     * account, an API error or an unreadable answer all refuse.
+     */
+    public static function userMayManage(array $params): bool
+    {
+        $clientId = (int) ($params['userid'] ?? 0);
+        if ($clientId <= 0 || !class_exists('\\WHMCS\\Authentication\\CurrentUser')) {
+            return false;
+        }
+        try {
+            $current = new \WHMCS\Authentication\CurrentUser();
+            $user    = $current->user();
+            $client  = $current->client();
+            if (!$user || !$client || (int) $client->id !== $clientId) {
+                return false;
+            }
+            if ($client->isOwnedBy($user)) {
+                return true;
+            }
+            $resp = localAPI('GetUserPermissions', ['user_id' => (int) $user->id, 'client_id' => $clientId]);
+            if (!is_array($resp) || ($resp['result'] ?? '') !== 'success') {
+                return false;
+            }
+            return in_array(self::MANAGE_PERMISSION, self::permissionNames($resp['permissions'] ?? null), true);
+        } catch (\Throwable $e) {
+            if (function_exists('logModuleCall')) {
+                logModuleCall(self::MODULE, 'error:userMayManage', ['client_id' => $clientId], get_class($e), '');
+            }
+            return false;
+        }
+    }
+
+    /**
+     * WHMCS-PERM-01: permission names from a GetUserPermissions answer — a list, a
+     * comma-separated string, a nested list or a name => true map.
+     *
+     * @return string[]
+     * @internal public for unit tests.
+     */
+    public static function permissionNames($raw): array
+    {
+        if (is_string($raw)) {
+            $raw = [$raw];
+        }
+        if (!is_array($raw)) {
+            return [];
+        }
+        $out = [];
+        array_walk_recursive($raw, function ($v, $k) use (&$out) {
+            if (is_string($k) && ($v === true || $v === 1 || $v === '1')) {
+                $out[] = strtolower(trim($k));
+            } elseif (is_string($v)) {
+                foreach (explode(',', $v) as $name) {
+                    $out[] = strtolower(trim($name));
+                }
+            }
+        });
+        return array_values(array_unique(array_filter($out, fn ($n) => $n !== '')));
+    }
+
     public static function clientArea(array $params): array
     {
         // T1.4: dispatch on customAction to either the embedded DNS
@@ -1121,6 +1232,32 @@ class PanelDnsResellerService
                 'templatefile' => 'templates/client/overview',
                 'vars' => ['paneldns_error' => 'DNS service is temporarily unavailable.', 'paneldns_nameservers' => []],
             ];
+        }
+
+        // SVC-STATUS-01 (v1.9.6): the portal button and the embedded DNS manager only for an
+        // Active service. Up to 1.9.5 nothing here looked at the service status: whether a
+        // Suspended, Pending or Terminated (grace period) service could edit DNS depended on
+        // WHMCS's page rendering alone, and PanelDNS refuses writes through the reseller
+        // token only for a suspended ZONE, not a suspended sub-client. A missing status
+        // refuses too. WHMCS passes the service status as $params['status'].
+        $serviceStatus = is_string($params['status'] ?? null) ? $params['status'] : '';
+        $active        = $serviceStatus === 'Active';
+
+        // WHMCS-PERM-01 (v1.9.6): ... and only for a user with the "Perform Single Sign-On"
+        // permission; anyone else gets the read-only overview.
+        $mayManage = $active && self::userMayManage($params);
+        $reason    = null;
+        if (!$active) {
+            $reason = 'DNS management is not available while this service is '
+                . ($serviceStatus !== '' ? $serviceStatus : 'not active') . '.';
+        } elseif (!$mayManage) {
+            $reason = 'DNS management is not available to your user account for this service.';
+        }
+
+        $notice = null;
+        if (!$mayManage && ($action === 'sso' || in_array($action, self::EMBEDDED_ACTIONS, true))) {
+            $notice = $active ? self::MSG_NO_PERMISSION : $reason;
+            $action = '';
         }
 
         // SSO-CLIENT-01: handle the in-template "Open full DNS Portal" button.
@@ -1161,6 +1298,9 @@ class PanelDnsResellerService
         // Default — render the overview with usage cards.
         $vars = [
             'paneldns_sub_client_id' => $svc->subClientId(), // NO-EMAIL-LINK-03: dedicatedip only
+            'paneldns_can_manage'    => $mayManage,          // WHMCS-PERM-01 / SVC-STATUS-01: show the DNS buttons
+            'paneldns_manage_reason' => $reason,
+            'paneldns_notice'        => $notice,
             'paneldns_status'        => 'unknown',
             'paneldns_usage'         => null,
             'paneldns_limits'        => null,

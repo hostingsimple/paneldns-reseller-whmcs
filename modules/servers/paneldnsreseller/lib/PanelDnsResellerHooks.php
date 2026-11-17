@@ -20,8 +20,10 @@
  *     client may not own.
  *   - DomainDelete: variables at TOP LEVEL — 'userid', 'domainid'. No domain
  *     name is passed, so it is resolved from tbldomains by id.
- *   - AddonActivated / AddonSuspended / AddonTerminated: TOP LEVEL — 'id',
- *     'userid', 'serviceid', 'addonid'. No addon name; resolved from tbladdons.
+ *   - AddonActivated / AddonUnsuspended / AddonSuspended / AddonTerminated /
+ *     AddonCancelled: TOP LEVEL — 'id' (tblhostingaddons.id), 'userid', 'serviceid',
+ *     'addonid'. No addon name; resolved from tbladdons.
+ *     https://developers.whmcs.com/hooks-reference/addon/
  *   - No invoice hook (PAY-02, v1.9.5). onInvoicePaid() and its InvoicePaymentSuccess
  *     hook (a name WHMCS does not have) were removed: on any payment they re-activated
  *     every suspended service of the client. WHMCS's own Enable Unsuspension calls
@@ -54,6 +56,7 @@ if (!defined('WHMCS')) {
 }
 
 require_once __DIR__ . '/PanelDnsApi.php';
+require_once __DIR__ . '/DriftSync.php'; // ID-STRICT-01: parseId()
 
 class PanelDnsResellerHooks
 {
@@ -135,12 +138,7 @@ class PanelDnsResellerHooks
         $domain = strtolower(trim($domain));
         if ($userId <= 0 || $domain === '') return [];
 
-        $names = [$domain];
-        if (str_contains($domain, 'xn--') && function_exists('idn_to_utf8')) {
-            $u = idn_to_utf8($domain, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
-            if (is_string($u) && $u !== '') $names[] = mb_strtolower($u);
-        }
-        $names = array_values(array_unique($names));
+        $names = self::domainNames($domain);
 
         $rows = \WHMCS\Database\Capsule::table('tbldomains')
             ->where('userid', $userId)
@@ -199,9 +197,9 @@ class PanelDnsResellerHooks
         }
 
         try {
-            // Find an active paneldnsreseller service for this client, pulling
-            // the two domain-automation config options from the product row.
-            $service = \WHMCS\Database\Capsule::table('tblhosting')
+            // The client's active paneldnsreseller services, with the two
+            // domain-automation config options from the product row.
+            $services = \WHMCS\Database\Capsule::table('tblhosting')
                 ->join('tblservers', 'tblhosting.server', '=', 'tblservers.id')
                 ->join('tblproducts', 'tblhosting.packageid', '=', 'tblproducts.id')
                 ->where('tblhosting.userid', $userId)
@@ -209,6 +207,7 @@ class PanelDnsResellerHooks
                 ->whereIn('tblproducts.servertype', self::SERVERTYPES)
                 ->select([
                     'tblhosting.id as service_id',
+                    'tblhosting.orderid as order_id',
                     'tblhosting.dedicatedip as sub_client_id',
                     'tblservers.hostname as server_hostname',
                     'tblservers.accesshash as server_key',
@@ -217,24 +216,14 @@ class PanelDnsResellerHooks
                     'tblproducts.configoption9 as auto_create',
                     'tblproducts.configoption10 as auto_delete',
                 ])
-                ->first();
+                ->orderBy('tblhosting.id')
+                ->get();
 
+            $service = self::serviceForDomain($services->all(), $userId, $domain, $action);
             if (!$service) {
                 return;
             }
-
-            $subClientId = (int) $service->sub_client_id;
-            if ($subClientId <= 0) {
-                return;
-            }
-
-            // yesno module config options store 'on' when ticked ('' when not).
-            if ($action === 'create' && !self::isYes($service->auto_create)) {
-                return;
-            }
-            if ($action === 'delete' && !self::isYes($service->auto_delete)) {
-                return;
-            }
+            $subClientId = (int) self::parseId($service->sub_client_id); // serviceForDomain() kept only ids
 
             if ($action === 'create' && !self::domainIsTheClients($userId, $domain, $transferCompleted)) {
                 logActivity("PanelDNS: auto-create zone {$domain} skipped for client #{$userId}"
@@ -275,6 +264,78 @@ class PanelDnsResellerHooks
     }
 
     /**
+     * DOMAIN-SVC-01 (v1.9.6): which of the client's active DNS services a domain event
+     * acts on, the same rule for create and delete:
+     *
+     *   - only services with a sub-client and the relevant option ticked (Auto-Create /
+     *     Auto-Delete Zone) are candidates;
+     *   - one candidate: that one;
+     *   - several: the one ordered together with the domain (tblhosting.orderid =
+     *     tbldomains.orderid), when exactly one was;
+     *   - otherwise none: the event is skipped and logged for the admin.
+     *
+     * Up to 1.9.5 the query took ->first() with no ordering and no server filter, so a
+     * client with DNS services on two PanelDNS servers or reseller orgs got the zone in
+     * whichever row MySQL returned, and auto-delete could look in the wrong one.
+     *
+     * @param array<int,object> $services the client's active services of this module
+     */
+    private static function serviceForDomain(array $services, int $userId, string $domain, string $action): ?object
+    {
+        $option = $action === 'create' ? 'auto_create' : 'auto_delete';
+        // yesno module config options store 'on' when ticked ('' when not).
+        $candidates = array_values(array_filter(
+            $services,
+            // ID-STRICT-01: only a plain id in Dedicated IP makes a service a candidate.
+            fn (object $s) => self::parseId($s->sub_client_id ?? null) !== null && self::isYes($s->{$option} ?? '')
+        ));
+        if (count($candidates) <= 1) {
+            return $candidates[0] ?? null;
+        }
+
+        $orderId = (int) \WHMCS\Database\Capsule::table('tbldomains')
+            ->where('userid', $userId)
+            ->whereIn('domain', self::domainNames($domain))
+            ->orderBy('id', 'desc')
+            ->value('orderid');
+        if ($orderId > 0) {
+            $sameOrder = array_values(array_filter($candidates, fn (object $s) => (int) ($s->order_id ?? 0) === $orderId));
+            if (count($sameOrder) === 1) {
+                return $sameOrder[0];
+            }
+        }
+
+        $ids = implode(', ', array_map(fn (object $s) => '#' . (int) $s->service_id, $candidates));
+        logActivity("PanelDNS: auto-{$action} zone {$domain} skipped for client #{$userId}: they have several DNS"
+            . " services ({$ids}) and none was ordered with this domain. Manage the zone in the right service by hand.");
+        return null;
+    }
+
+    /** The lower-cased spellings of a domain to match in tbldomains (an IDN also in Unicode). */
+    private static function domainNames(string $domain): array
+    {
+        $domain = strtolower(trim($domain));
+        $names = [$domain];
+        if (str_contains($domain, 'xn--') && function_exists('idn_to_utf8')) {
+            $u = idn_to_utf8($domain, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
+            if (is_string($u) && $u !== '') $names[] = mb_strtolower($u);
+        }
+        return array_values(array_unique($names));
+    }
+
+    /**
+     * ID-STRICT-01 (v1.9.6, ported from paneldns-whmcs 1.1.4): the sub-client id stored in
+     * a service's Dedicated IP, or null when the value is not one. Dedicated IP is WHMCS's
+     * IP-address field, and `(int) '203.0.113.5'` is 203: the grace cron would delete,
+     * ClientEdit rename and domain auto-create add a zone under another customer's
+     * sub-client. One rule for every path: PanelDnsResellerDriftSync::parseId().
+     */
+    public static function parseId($v): ?int
+    {
+        return PanelDnsResellerDriftSync::parseId($v);
+    }
+
+    /**
      * A yes/no module option is on. WHMCS stores a ticked box as 'on'; 'yes' (the
      * ConfigOptions default) and '1' are accepted too (WELCOME-01).
      *
@@ -286,19 +347,78 @@ class PanelDnsResellerHooks
     }
 
     /**
-     * ADDON-01: adjust a sub-client's zone limit when a product addon is
-     * activated (+) or suspended/terminated (-).
-     *
-     * The number of extra zones is parsed from the addon's name in tbladdons
-     * (e.g. "PanelDNS +10 Zones" → 10). Falls back to 5 if no number is found.
-     *
-     * @param int $serviceId WHMCS hosting service id (tblhosting.id)
-     * @param int $addonId   Predefined addon id (tbladdons.id)
-     * @param int $direction +1 to grant, -1 to revoke
+     * ADDON-ZONES-01 (v1.9.6): the only predefined-addon names that grant zones, e.g.
+     * "PanelDNS +10 Zones". The whole name must match; there is no fallback.
      */
-    public static function onAddonChange(int $serviceId, int $addonId, int $direction): void
+    const ZONE_PACK_PATTERN = '/^\s*PanelDNS\s*\+\s*(\d{1,5})\s*zones?\s*$/i';
+
+    /**
+     * ADDON-ZONES-01: while an addon hook runs, the state the addon is moving to
+     * (tblhostingaddons.id => active), so the count does not depend on whether WHMCS has
+     * written the addon's new status before running the hook.
+     *
+     * @var array<int,bool>
+     */
+    public static $addonStateOverride = [];
+
+    /**
+     * ADDON-ZONES-01: the zones an addon of this name grants; 0 when it is not a PanelDNS
+     * zone pack.
+     *
+     * @internal public for unit tests.
+     */
+    public static function zonePackSize(string $addonName): int
     {
-        if ($serviceId <= 0) {
+        return preg_match(self::ZONE_PACK_PATTERN, $addonName, $m) ? (int) $m[1] : 0;
+    }
+
+    /**
+     * ADDON-ZONES-01: the extra zones the service's ACTIVE PanelDNS zone-pack addons
+     * grant, counted from tblhostingaddons each time. Throws on a DB error: a limit
+     * computed without the addons would take zones away.
+     */
+    public static function addonZones(int $serviceId): int
+    {
+        if ($serviceId <= 0) return 0;
+
+        $rows = \WHMCS\Database\Capsule::table('tblhostingaddons')
+            ->join('tbladdons', 'tblhostingaddons.addonid', '=', 'tbladdons.id')
+            ->where('tblhostingaddons.hostingid', $serviceId)
+            ->select(['tblhostingaddons.id', 'tblhostingaddons.status', 'tbladdons.name'])
+            ->get();
+
+        $zones = 0;
+        foreach ($rows as $row) {
+            $id     = (int) ($row->id ?? 0);
+            $active = self::$addonStateOverride[$id] ?? ((string) ($row->status ?? '') === 'Active');
+            if ($active) {
+                $zones += self::zonePackSize((string) ($row->name ?? ''));
+            }
+        }
+        return $zones;
+    }
+
+    /**
+     * ADDON-01 / ADDON-ZONES-01 (v1.9.6): a PanelDNS zone-pack addon on one of this
+     * module's services changed state; re-apply the service's limits.
+     *
+     * The limit is recomputed, not adjusted: product (or "Zone Limit" Configurable
+     * Option) limit + every active zone pack on the service (addonZones()), through
+     * WHMCS's ModuleChangePackage, i.e. this module's own ChangePackage — the same
+     * function CreateAccount and package upgrades use. Up to 1.9.5 every addon on the
+     * service, whatever it was, added the number in its name or 5 by default, and
+     * suspend/terminate subtracted it again: any cheap addon granted 5 zones, suspend +
+     * unsuspend lost zones for good (AddonUnsuspended was not hooked), suspend + terminate
+     * subtracted twice, and the next ChangePackage reset the grants.
+     *
+     * @param int  $serviceId      WHMCS hosting service id (tblhosting.id)
+     * @param int  $addonId        predefined addon id (tbladdons.id)
+     * @param int  $hostingAddonId the service's addon row (tblhostingaddons.id; the hook's 'id')
+     * @param bool $active         the state the addon is moving to
+     */
+    public static function onAddonChange(int $serviceId, int $addonId, int $hostingAddonId, bool $active): void
+    {
+        if ($serviceId <= 0 || $addonId <= 0) {
             return;
         }
 
@@ -321,33 +441,30 @@ class PanelDnsResellerHooks
                 return;
             }
 
-            $subClientId = (int) $service->sub_client_id;
-            if ($subClientId <= 0) {
+            // ID-STRICT-01 (v1.9.6): only a plain id in Dedicated IP.
+            if (self::parseId($service->sub_client_id ?? null) === null) {
                 return;
             }
 
-            // Resolve the addon name (the hook does not pass it).
-            $addonName = '';
-            if ($addonId > 0) {
-                $addonName = (string) \WHMCS\Database\Capsule::table('tbladdons')
-                    ->where('id', $addonId)
-                    ->value('name');
-            }
-
-            preg_match('/\+?\s*(\d+)\s*zone/i', $addonName, $m);
-            $extraZones = isset($m[1]) ? (int) $m[1] : 5;
-
-            $api = self::apiForServer($service);
-
-            $current = $api->getSubClient($subClientId);
-            if (!($current['ok'] ?? false)) {
+            // Resolve the addon name (the hook does not pass it). Any other addon on the
+            // service (support, SSL, a free extra) changes nothing.
+            $addonName = (string) \WHMCS\Database\Capsule::table('tbladdons')
+                ->where('id', $addonId)
+                ->value('name');
+            if (self::zonePackSize($addonName) <= 0) {
                 return;
             }
 
-            $currentLimit = (int) ($current['data']['zone_limit'] ?? 0);
-            $newLimit     = max(0, $currentLimit + ($direction * $extraZones));
-
-            $api->patchSubClient($subClientId, ['zone_limit' => $newLimit]);
+            self::$addonStateOverride = $hostingAddonId > 0 ? [$hostingAddonId => $active] : [];
+            try {
+                $result = localAPI('ModuleChangePackage', ['serviceid' => $serviceId]);
+            } finally {
+                self::$addonStateOverride = [];
+            }
+            if (($result['result'] ?? '') !== 'success') {
+                logActivity("PanelDNS: re-applying the zone limit of service #{$serviceId} after an addon change failed: "
+                    . substr((string) ($result['message'] ?? 'unknown error'), 0, 200));
+            }
         } catch (\Throwable $e) {
             // SEC-L06: log class only — exception messages may contain PII or SQL fragments.
             logActivity('PanelDNS addon hook error (' . get_class($e) . ')');
@@ -390,8 +507,9 @@ class PanelDnsResellerHooks
                 ->get();
 
             foreach ($services as $service) {
-                $subClientId = (int) $service->sub_client_id;
-                if ($subClientId <= 0) continue;
+                // ID-STRICT-01 (v1.9.6): '203.0.113.5' must not rename sub-client 203.
+                $subClientId = self::parseId($service->sub_client_id ?? null);
+                if ($subClientId === null) continue;
                 $resp = self::apiForServer($service)->patchSubClient($subClientId, $patch);
                 if (!($resp['ok'] ?? false)) {
                     logActivity('PanelDNS client sync failed for sub-client ' . $subClientId . ': '
@@ -458,7 +576,16 @@ class PanelDnsResellerHooks
                 $deadline = self::graceDeadline((string) $svc->notes);
                 if ($deadline === null || $deadline > $today) continue; // no marker / not yet expired
 
-                $subClientId = (int) $svc->sub_client_id;
+                // ID-STRICT-01 (v1.9.6): a value that is not a plain id (an IP address in
+                // Dedicated IP) deletes nothing and keeps the marker for an admin. An empty
+                // value still just clears the marker.
+                $subClientId = (int) self::parseId($svc->sub_client_id ?? null);
+                $zones       = ['deleted' => 0];
+                if ($subClientId === 0 && trim((string) ($svc->sub_client_id ?? '')) !== '') {
+                    logActivity("PanelDNS: grace period expired for service #{$svc->service_id}, but its Dedicated IP is not"
+                        . ' a sub-client id. Nothing was deleted; the grace marker is kept for you to check the service.');
+                    continue;
+                }
 
                 // NO-EMAIL-LINK-02 (v1.9.4): CreateAccount no longer re-links a re-order to
                 // the client's old sub-client, so that is now an admin step (Dedicated IP +
@@ -480,7 +607,16 @@ class PanelDnsResellerHooks
 
                 if ($subClientId > 0) {
                     try {
-                        $resp = self::apiForServer($svc)->deleteSubClient($subClientId);
+                        $api = self::apiForServer($svc);
+                        // TERM-ZONES-01 (v1.9.6): the zones first; a failure keeps the
+                        // marker so the next cron retries.
+                        $zones = self::deleteSubClientZones($api, $subClientId);
+                        if (!$zones['ok']) {
+                            logActivity('PanelDNS grace delete postponed for sub-client ' . $subClientId
+                                . ' (service #' . $svc->service_id . '): ' . $zones['error'] . '. Will retry on the next cron.');
+                            continue;
+                        }
+                        $resp = $api->deleteSubClient($subClientId);
                     } catch (\Throwable $e) {
                         logActivity('PanelDNS grace delete failed for service #' . $svc->service_id
                             . ' (' . get_class($e) . ')');
@@ -506,11 +642,63 @@ class PanelDnsResellerHooks
                 } catch (\Throwable $e) { /* swallow */ }
 
                 logActivity("PanelDNS: grace period expired, deleted sub-client {$subClientId}"
-                    . " (service #{$svc->service_id})");
+                    . ' and ' . (int) $zones['deleted'] . " zone(s) (service #{$svc->service_id})");
             }
         } catch (\Throwable $e) {
             logActivity('PanelDNS grace period cron error (' . get_class($e) . ')');
         }
+    }
+
+    /** TERM-ZONES-01: zones are listed 50 per page; 100 pages = 5,000 zones per sub-client. */
+    const TERMINATE_ZONES_MAX_PAGES = 100;
+
+    /**
+     * TERM-ZONES-01 (v1.9.6): delete every zone of a sub-client. Called before the
+     * sub-client itself is deleted, by TerminateAccount and the grace-period cron.
+     *
+     * PanelDNS's DELETE /api/v1/sub-clients/{id} deletes only the sub-client row; the zones
+     * FK is nullOnDelete, so up to 1.9.5 every zone of a terminated customer stayed live
+     * at the DNS provider as an org-level zone, and the name stayed blocked for whoever
+     * legitimately took the domain next. Each zone goes through DELETE /api/v1/zones/{id}
+     * (ZoneManager::deleteZone, which removes it at the provider).
+     *
+     * Stops at the first failure so the caller can keep the sub-client (and retry): a
+     * listing error, a listing cut short, or a zone delete that is refused. A 404 on a
+     * zone means it is already gone. Only zones whose sub_client_id is this sub-client
+     * are deleted, so a server that ignores the filter cannot take other zones with it.
+     *
+     * @return array{ok:bool, deleted:int, error:?string}
+     */
+    public static function deleteSubClientZones(PanelDnsResellerApi $api, int $subClientId): array
+    {
+        if ($subClientId <= 0) {
+            return ['ok' => true, 'deleted' => 0, 'error' => null];
+        }
+
+        $list = $api->getAllPages('/api/v1/zones', ['sub_client_id' => $subClientId], self::TERMINATE_ZONES_MAX_PAGES);
+        if (!$list['ok']) {
+            return ['ok' => false, 'deleted' => 0, 'error' => 'listing its zones failed: ' . ($list['error'] ?? 'unknown error')];
+        }
+        if (!empty($list['truncated'])) {
+            return ['ok' => false, 'deleted' => 0, 'error' => 'it has more zones than one run can list ('
+                . count($list['data']) . ' of ' . (int) ($list['total'] ?? 0) . ')'];
+        }
+
+        $deleted = 0;
+        foreach ($list['data'] as $zone) {
+            if (!is_array($zone) || (int) ($zone['sub_client_id'] ?? 0) !== $subClientId) continue;
+            $zoneId = (int) ($zone['id'] ?? 0);
+            if ($zoneId <= 0) continue;
+
+            $del = $api->delete('/api/v1/zones/' . $zoneId);
+            if (!($del['ok'] ?? false) && (int) ($del['status'] ?? 0) !== 404) {
+                $name = preg_replace('/[^a-z0-9._-]/i', '', (string) ($zone['name'] ?? ''));
+                return ['ok' => false, 'deleted' => $deleted, 'error' => "deleting zone {$name} (#{$zoneId}) failed: "
+                    . substr((string) ($del['error'] ?? 'unknown error'), 0, 200)];
+            }
+            $deleted++;
+        }
+        return ['ok' => true, 'deleted' => $deleted, 'error' => null];
     }
 
     /**
@@ -593,6 +781,7 @@ class PanelDnsResellerHooks
 
         // SEC-H7: SSRF pre-flight — validate server hostname before building the API client.
         // This path bypasses __construct() and constructs PanelDnsResellerApi directly.
+        // A fail-fast only: the enforcing check is the client's pinned pre-flight (SSRF-PIN-01).
         $hookResolved = gethostbyname($service->server_hostname);
         if (filter_var($hookResolved, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
             throw new \RuntimeException('paneldnsreseller: server hostname resolves to a private/reserved IP address.');

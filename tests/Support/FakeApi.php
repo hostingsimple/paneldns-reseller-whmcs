@@ -14,6 +14,10 @@ final class FakeApi extends PanelDnsResellerApi
     /** @var list<array{0:string,1:string,2:mixed}> */
     private array $routes = [];
 
+    /** SSRF-PIN-01: what the fake resolver answers for any host, and the hosts it was asked for. */
+    public array $resolved = ['203.0.113.10'];
+    public array $lookups = [];
+
     public function __construct(string $token = '')
     {
         parent::__construct(
@@ -54,12 +58,18 @@ final class FakeApi extends PanelDnsResellerApi
         ));
     }
 
+    protected function resolveHost(string $host): array
+    {
+        $this->lookups[] = $host;
+        return $this->resolved;
+    }
+
     protected function transport(string $method, string $url, ?array $body): array
     {
         $parts = parse_url($url);
         $path  = $parts['path'] ?? '/';
         parse_str($parts['query'] ?? '', $query);
-        $this->calls[] = ['method' => strtoupper($method), 'path' => $path, 'query' => $query, 'body' => $body];
+        $this->calls[] = ['method' => strtoupper($method), 'path' => $path, 'query' => $query, 'body' => $body, 'pin' => $this->pin];
 
         foreach (array_reverse($this->routes) as [$m, $p, $resp]) {
             if ($m === strtoupper($method) && $p === $path) {

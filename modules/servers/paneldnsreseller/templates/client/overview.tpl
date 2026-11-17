@@ -14,6 +14,12 @@
         </div>
     {/if}
 
+    {if $paneldns_notice}
+        <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:12px 16px; border-radius:8px; color:#1e3a8a; font-size:13px; margin-bottom:16px;">
+            {$paneldns_notice|escape}
+        </div>
+    {/if}
+
     {if $paneldns_error}
         <div style="background:#fee2e2; border:1px solid #fca5a5; padding:12px 16px; border-radius:8px; color:#991b1b; font-size:13px; margin-bottom:16px;">
             Could not load live data: {$paneldns_error|escape}. Try refreshing the page.
@@ -26,7 +32,12 @@
             Manage your zones and DNS records via the customer portal.
         </p>
 
-        {if $paneldns_sub_client_id}
+        {* WHMCS-PERM-01 (v1.9.6): the DNS buttons only for users who may manage DNS. *}
+        {if $paneldns_sub_client_id && !$paneldns_can_manage}
+            <p style="margin:0;font-size:13px;color:#6b7280;">
+                {$paneldns_manage_reason|escape}
+            </p>
+        {elseif $paneldns_sub_client_id}
             <div style="display:flex;gap:10px;flex-wrap:wrap;">
                 {* T1.4: primary CTA is now the in-page DNS manager *}
                 <a href="clientarea.php?action=productdetails&id={$serviceid}&customAction=zones"

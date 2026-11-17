@@ -16,14 +16,16 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 | Admin suspends service | Sub-client suspended in PanelDNS |
 | Admin unsuspends | Sub-client re-activated |
 | Client pays an overdue invoice | WHMCS unsuspends a service it suspended for non-payment (Automation Settings → Enable Unsuspension), which re-activates the sub-client. A suspension with any other reason stays |
-| Admin terminates | Sub-client deleted (or suspended for a configurable grace period) |
-| Admin changes package | Zone and record limits updated |
+| Admin terminates | The sub-client's zones are deleted, then the sub-client (or it is suspended for a configurable grace period, and both are deleted when it ends) |
+| Admin changes package | Zone and record limits updated (zone limit = plan + active "PanelDNS +N Zones" addons) |
 | Client updates profile | Name synced to PanelDNS automatically (the email stays fixed — it is the sub-client's sign-in identity) |
 
 ### Additional features
 
 - **Embedded DNS manager** — clients manage their zones and records directly inside
-  the WHMCS client area without leaving your billing portal
+  the WHMCS client area without leaving your billing portal. Available for Active
+  services, to the account owner and to users with the **Perform Single Sign-On**
+  permission (v1.9.6)
 - **DNSSEC signing** — clients can enable/disable DNSSEC on each zone from the record
   manager; DS records are displayed for submission at the domain registrar (requires
   PanelDNS 3.24+, silently hidden for older installs or providers without DNSSEC support)
@@ -38,8 +40,10 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 - **Zones only for the client's own domains** — clients can add zones only for domains
   that are Active on their own WHMCS account, unless the product allows others; even
   then, never a name that overlaps another customer's zone (v1.9.5)
-- **Addon products for extra zones** — sell "PanelDNS +10 Zones" addons; activation
-  raises the sub-client's zone limit, suspension lowers it back
+- **Addon products for extra zones** — sell addons named exactly `PanelDNS +N Zones`
+  (e.g. "PanelDNS +10 Zones"). The zone limit is always the plan's limit plus the active
+  zone packs, so activation raises it, suspension lowers it, and unsuspending or a package
+  change keeps it right. Other addons never change the limit (v1.9.6)
 - **Live usage panel** — the admin service detail page shows zones/records used vs
   limit with colour-coded progress bars and the actual zone names
 - **Zone health widget** — clients see any non-active zones flagged at the top of
@@ -47,8 +51,10 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 - **Bulk sub-client sync** — a server-level button provisions all existing WHMCS
   clients in one run; idempotent (safe to re-run at any time). A client whose email
   already has a PanelDNS sub-client is listed for review and never linked automatically
-- **Daily drift sync** — a background job keeps WHMCS and PanelDNS statuses in sync
-  and catches any divergence between the two systems
+- **Daily drift sync** — a background job compares WHMCS and PanelDNS statuses. WHMCS is
+  the source of truth: a sub-client re-activated in PanelDNS while WHMCS has the service
+  suspended is suspended again, a sub-client suspended or cancelled in PanelDNS is mirrored
+  into WHMCS, and one PanelDNS cannot find is flagged for review, never terminated (v1.9.6)
 - **Client profile sync** — name changes in WHMCS are pushed to PanelDNS automatically
   (PanelDNS does not accept email or language changes through its API)
 - **Consent at provisioning (GDPR)** — when a sub-client is provisioned, the module
@@ -118,9 +124,9 @@ are available:
 | Send Welcome Email | Yes | Email the client a portal login link and nameserver details on provisioning. |
 | NS1–NS4 Hostname | **(blank)** | Override the nameservers shown in the welcome email and client area for this product (white-label branding). Leave blank to use the org's default nameservers. |
 | SOA Email | **(blank)** | Override the SOA contact email shown in the welcome email. |
-| Auto-Create Zone on Domain Order | Yes | Automatically create a DNS zone when a domain on the client's account is registered, or its transfer completes (`DomainTransferCompleted`). A transfer that has only been submitted creates nothing. |
-| Auto-Delete Zone on Domain Expiry | No | Remove the DNS zone when a domain is deleted. Disabled by default. |
-| Termination Grace Period (Days) | 0 | Days to wait before permanently deleting the sub-client after termination. 0 = delete immediately. Sub-client is suspended during the grace period and hard-deleted nightly once it expires. |
+| Auto-Create Zone on Domain Order | Yes | Automatically create a DNS zone when a domain on the client's account is registered, or its transfer completes (`DomainTransferCompleted`). A transfer that has only been submitted creates nothing. If the client has several DNS services with this on, the one ordered with the domain gets the zone; if none was, nothing is created and the Activity Log says why. |
+| Auto-Delete Zone on Domain Expiry | No | Remove the DNS zone when a domain is deleted. Disabled by default. Picks the service the same way as auto-create. |
+| Termination Grace Period (Days) | 0 | Days to wait before permanently deleting the sub-client after termination. 0 = delete immediately. Sub-client is suspended during the grace period and hard-deleted nightly once it expires. Its zones are deleted with it; during the grace period they keep resolving. |
 | Allow Zones for Domains Not in This Account | **No** | `configoption12`, added in 1.9.5. **Off:** a client can add a zone only for a domain that is Active on their own WHMCS account. **On:** any name, except one that equals, contains or sits inside another customer's zone (or one of your org's own zones). Turn it on only if your customers host domains registered elsewhere. A zone for a domain the client does not own takes over that domain's DNS once it points at your nameservers. |
 
 ### Per-order zone limits with WHMCS Configurable Options
@@ -177,7 +183,7 @@ build.php                              builds dist/paneldns-reseller-whmcs-X.Y.Z
 
 - The API token is stored in WHMCS's encrypted server Access Hash. Module-log entries are
   scrubbed at any depth: passwords, tokens, secrets and keys are replaced by `[REDACTED]`,
-  one-time SSO links lose their `token=`, the secret values are also passed to WHMCS's
+  one-time SSO links are redacted whole (since 1.9.6), the secret values are also passed to WHMCS's
   log masking, `?search=` / `?email=` values are redacted from logged URLs, and zone files
   are logged by size only.
 - Every client-area zone or record action first checks that the zone belongs to the
@@ -185,9 +191,30 @@ build.php                              builds dist/paneldns-reseller-whmcs-X.Y.Z
 - Client-area forms carry a per-service CSRF token, rotated after each change; mutations
   are POST-only and the embedded manager is rate-limited to 60 requests per minute.
 - Server hostnames that resolve to private or reserved addresses are refused (SSRF), and
-  cURL is IPv4-only with TLS verification on.
+  cURL is IPv4-only with TLS verification on. Since 1.9.6 the hostname is looked up once,
+  checked before anything is sent, and cURL connects to exactly that address
+  (`CURLOPT_RESOLVE`), so a second DNS answer cannot re-point the request.
 - Network-level error text (hostnames, IPs, TLS detail) stays in the module log; WHMCS
-  screens and the client area show a generic line.
+  screens and the client area show a generic line. Since 1.9.6 the same goes for any
+  error PanelDNS answers with HTTP 5xx (for example a DNS server's own error on a zone
+  export or import); clients see PanelDNS's 4xx messages (validation, limits) only.
+- **Client-area access (v1.9.6).** The portal button and the embedded DNS manager work
+  only for an Active service, and only for the account owner or a user with the WHMCS
+  **Perform Single Sign-On** permission on that account. Other users see the overview
+  without the DNS buttons.
+- **Terminate removes the zones (v1.9.6).** PanelDNS deletes only the sub-client when asked
+  to, so the module deletes the sub-client's zones first; a failed zone delete keeps the
+  sub-client so the run can be repeated.
+- **WHMCS is the source of truth for status (v1.9.6).** The drift sync never makes a
+  service less restricted than WHMCS has it and never terminates a service because
+  PanelDNS answered "not found".
+- **Only named zone packs add zones (v1.9.6).** An addon must be named `PanelDNS +N Zones`;
+  the limit is recomputed from the plan and the active packs, not adjusted.
+- **Strict sub-client ids (v1.9.6).** Every nightly job and hook reads the sub-client id
+  from Dedicated IP as a plain whole number only; an IP address there is never read as an
+  id (`203.0.113.5` is not sub-client 203).
+- **SSO links stay out of the module log (v1.9.6).** An SSO answer's `login_url` is
+  redacted whole, and every token cut from a log entry is also masked by WHMCS.
 - **No account linking by email (v1.9.4).** WHMCS does not verify client email addresses,
   so a service is linked only to the sub-client id PanelDNS issued for it, kept in the
   service's admin-only Dedicated IP field. SSO, suspend, terminate and the embedded DNS
