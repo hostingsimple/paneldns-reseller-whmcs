@@ -263,7 +263,7 @@ final class PanelDnsResellerHooksTest extends TestCase
     {
         $src = (string) file_get_contents(__DIR__ . '/../modules/servers/paneldnsreseller/lib/PanelDnsResellerHooks.php');
         $this->assertDoesNotMatchRegularExpression("/servertype',\s*'paneldns[-_]reseller'/", $src);
-        $this->assertSame(6, substr_count($src, "->whereIn('tblproducts.servertype', self::SERVERTYPES)"));
+        $this->assertSame(5, substr_count($src, "->whereIn('tblproducts.servertype', self::SERVERTYPES)"));
         $this->assertSame('paneldnsreseller', PanelDnsResellerHooks::MODULE);
         // The filters match the legacy names until migrated, and never a platform name.
         $this->assertSame(

@@ -5,14 +5,6 @@ use WHMCS\Database\Capsule;
 
 require_once __DIR__ . '/../modules/servers/paneldnsreseller/paneldnsreseller.php'; // ConfigOptions
 
-if (!function_exists('add_hook')) {
-    /** Records hooks.php's registrations so a test can fire them. */
-    function add_hook(string $point, int $priority, callable $fn): void
-    {
-        $GLOBALS['__hooks'][$point][] = $fn;
-    }
-}
-
 /**
  * ZONE-OWN-01..05 (v1.9.5): a customer can create a zone only for a domain on their own
  * WHMCS account. Up to 1.9.4 any customer could add any name — a subdomain of another
@@ -439,7 +431,7 @@ final class ZoneOwnershipTest extends TestCase
 
     // ── hooks.php: which WHMCS hooks create zones ──────────────────────────────
 
-    /** hooks.php's registrations, loaded once through the stub add_hook() above. */
+    /** hooks.php's registrations, loaded once through the add_hook() stub in bootstrap.php. */
     private static function hooks(): array
     {
         require_once __DIR__ . '/../modules/servers/paneldnsreseller/hooks.php';

@@ -170,7 +170,7 @@ platform provider — your clients and your own admin setup see only your brand.
    - **Server Group**: select the server group containing your PanelDNS server
 
    Saving the product with this module also makes WHMCS register the module's
-   `hooks.php` (daily drift sync, grace-period cron, domain/addon/payment hooks) —
+   `hooks.php` (daily drift sync, grace-period cron, domain, addon and client-edit hooks) —
    WHMCS only loads a provisioning module's hooks once a product using it is saved.
 
 5. Still on Module Settings, configure the options:
@@ -382,6 +382,24 @@ It covers this module's services only; the operator module (`paneldnsplatform`)
 reconciles its own. No setup is required beyond the standard WHMCS
 cron — but WHMCS only loads the module's hooks after a product using the module has
 been saved once (Step 4).
+
+## Suspension and payment
+
+The module adds no invoice hook. Suspending and unsuspending for non-payment is WHMCS's
+own automation (**Setup → Automation Settings**), which calls the module's Suspend and
+Unsuspend:
+
+- **Enable Suspension** suspends an overdue service with the reason "Overdue on Payment",
+  and the module suspends the sub-client in PanelDNS.
+- **Enable Unsuspension** unsuspends that service when its overdue invoice is paid, and
+  the module re-activates the sub-client. Paying some other invoice, such as an Add Funds
+  invoice, does not.
+- WHMCS does not unsuspend a service you suspended by hand with your own reason (for
+  example "Abuse"), whatever the client pays. Unsuspend it yourself when you are ready.
+
+Up to 1.9.4 the module registered an `InvoicePaymentSuccess` hook that re-activated every
+suspended service of a client on any payment, whatever the reason for the suspension.
+WHMCS has no hook of that name, so it should never have run. It was removed in 1.9.5.
 
 ## Client profile sync
 

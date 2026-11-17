@@ -15,6 +15,7 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 | Client orders product | Sub-client created in PanelDNS, welcome email sent with portal login |
 | Admin suspends service | Sub-client suspended in PanelDNS |
 | Admin unsuspends | Sub-client re-activated |
+| Client pays an overdue invoice | WHMCS unsuspends a service it suspended for non-payment (Automation Settings → Enable Unsuspension), which re-activates the sub-client. A suspension with any other reason stays |
 | Admin terminates | Sub-client deleted (or suspended for a configurable grace period) |
 | Admin changes package | Zone and record limits updated |
 | Client updates profile | Name synced to PanelDNS automatically (the email stays fixed — it is the sub-client's sign-in identity) |
@@ -156,11 +157,11 @@ product-level Zone Limit only if it is not set.
 ```
 modules/servers/paneldnsreseller/      ← what the release ZIP installs
 ├── paneldnsreseller.php               WHMCS module functions (paneldnsreseller_*)
-├── hooks.php                          cron, domain, addon, client-edit, payment hooks
+├── hooks.php                          cron, domain, addon and client-edit hooks
 ├── templates/client/*.tpl             client-area pages (?customAction=zones, records, …)
 └── lib/
     ├── PanelDnsResellerService.php    lifecycle, SSO, admin tab, client area
-    ├── PanelDnsResellerHooks.php      hook logic (domain/addon/grace/payment)
+    ├── PanelDnsResellerHooks.php      hook logic (domain/addon/grace/client edit)
     ├── PanelDnsResellerMigration.php  pre-1.9.3 module-name migration
     ├── EmbeddedDnsManager.php         in-WHMCS zone + record manager
     └── PanelDnsApi.php, LicenceCheck.php, DriftSync.php, WelcomeMail.php
@@ -208,6 +209,11 @@ build.php                              builds dist/paneldns-reseller-whmcs-X.Y.Z
   When PanelDNS refuses a name as taken, the client sees only "This zone name is
   unavailable." and the detail goes to the Activity Log, so customers cannot find out which
   names other customers host.
+- **A payment never lifts a suspension through the module (v1.9.5).** The module has no
+  invoice hook. Up to 1.9.4 it registered one (`InvoicePaymentSuccess`, a name WHMCS does
+  not have) that re-activated every suspended service of a client on any payment, abuse
+  suspensions included. Unsuspension on payment is left to WHMCS's own Enable Unsuspension,
+  which calls the module's Unsuspend only for services WHMCS suspended for non-payment.
 
 ---
 

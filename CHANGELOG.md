@@ -53,6 +53,36 @@ PanelDNS itself is gaining the same overlap refusal across tenants and sub-clien
 module's check does not depend on that change: it applies to any PanelDNS version this
 module supports.
 
+### Security — paying an invoice no longer re-activates suspended services (PAY-02)
+
+Since 1.5.0, `hooks.php` registered an `InvoicePaymentSuccess` hook (PAY-01). On any
+payment by a client, it set every Suspended service of this module for that client to
+active in PanelDNS and wrote Active into the WHMCS service. It did not check which invoice
+was paid (an Add Funds invoice counted), why the service was suspended (abuse, a manual
+hold), or whether other invoices were still overdue. A customer suspended for abuse would
+get DNS editing and portal sign-in back by paying any small invoice.
+
+WHMCS has no hook called `InvoicePaymentSuccess`. Its
+[hook reference](https://developers.whmcs.com/hooks-reference/invoices-and-quotes/) has
+`InvoicePaid`, `InvoicePaidPreEmail` and `AddInvoicePayment`, which pass the invoice id
+and not the client id. So the hook should never have run, and up to 1.9.2 it could not
+have acted anyway (MODULE-NAME-01). It is **removed, not renamed**, because WHMCS already
+does this job correctly:
+
+- With **Setup → Automation Settings → Enable Unsuspension** on, paying an overdue invoice
+  unsuspends a service that WHMCS suspended for non-payment (reason "Overdue on Payment").
+  WHMCS does this at payment time, through the module's **UnsuspendAccount**, which
+  re-activates the sub-client. A service suspended by hand with a custom reason is not
+  unsuspended
+  ([Billing Logic](https://docs.whmcs.com/billing-and-invoicing/billing-logic),
+  [Automation Settings](https://docs.whmcs.com/system/automation/automation-settings)).
+- `InvoicePaid` runs after those automation tasks, so a module hook there could only
+  repeat or overrule what WHMCS decided.
+
+The 1.5.0 entry said a client who paid would otherwise stay suspended until the nightly
+drift sync. That was not so: WHMCS unsuspends at payment, and the drift sync never
+re-activates a sub-client in PanelDNS.
+
 ### Upgrade notes
 
 - After the upgrade, a customer can no longer add a zone for a domain that is not on their
@@ -62,6 +92,10 @@ module supports.
 - Zones that already exist are not touched. To find squatted names from before 1.9.5, look
   in PanelDNS for zones whose name is a subdomain of a zone held by a different sub-client,
   and for zones whose domain is not on that customer's WHMCS account.
+- To have DNS services unsuspended when their overdue invoice is paid, turn on **Enable
+  Unsuspension** in **Setup → Automation Settings**, as for any other product. Give every
+  suspension that is not about billing (abuse, ID checks) your own reason, so no payment
+  lifts it.
 
 ---
 

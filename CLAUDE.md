@@ -35,7 +35,7 @@
 | `1.9.2` | 2026-08-27 | Past-due grace clock fix; `curl_close()` removed |
 | `1.9.3` | 2026-11-08 | Rename to `paneldnsreseller` + migration; self-contained ZIP; `getLegalVersion` shipped; import `zone_file`; paging; duplicate email; grace cron; errors/429 |
 | `1.9.4` | 2026-11-18 | Security: no account linking by email — Bulk Sync reports matches, duplicate-email Create never links, sub-client id from Dedicated IP only; grace cron skips a re-linked sub-client |
-| `1.9.5` | 2026-11-18 | Security: zones only for the client's own domains (configoption12 opt-out with overlap check); auto-create on `DomainTransferCompleted`, not `AfterRegistrarTransfer`; generic "unavailable" for name conflicts |
+| `1.9.5` | 2026-11-18 | Security: zones only for the client's own domains (configoption12 opt-out with overlap check); auto-create on `DomainTransferCompleted`, not `AfterRegistrarTransfer`; generic "unavailable" for name conflicts; PAY-02: removed the `InvoicePaymentSuccess` hook that unsuspended on any payment |
 
 ## Overview
 
@@ -106,6 +106,15 @@ must prove the name is the client's:
   unavailable."; the detail goes to `logActivity()`. Never show PanelDNS's conflict wording
   to a client.
 
+### Suspension and payment (v1.9.5, PAY-02)
+
+No hook may unsuspend a service or write `tblhosting.domainstatus` on payment. WHMCS's
+Enable Unsuspension already calls `UnsuspendAccount`, at payment time, only for services
+it suspended for non-payment ("Overdue on Payment"), and `InvoicePaid` runs after it.
+`InvoicePaymentSuccess` is not a WHMCS hook; the invoice hooks (`InvoicePaid`,
+`InvoicePaidPreEmail`, `AddInvoicePayment`) pass `invoiceid`, not `userid`.
+`tests/InvoicePaymentTest.php` fails if any of them is registered.
+
 ### Shared files — keep in sync with paneldns-whmcs
 
 The following files exist in BOTH repos and must be kept in sync manually:
@@ -142,7 +151,7 @@ through that layout.
 ## Key Files
 
 - `modules/servers/paneldnsreseller/paneldnsreseller.php` — main module file
-- `modules/servers/paneldnsreseller/hooks.php` — WHMCS hooks (cron, domain, addon, client edit, payment)
+- `modules/servers/paneldnsreseller/hooks.php` — WHMCS hooks (cron, domain, addon, client edit)
 - `modules/servers/paneldnsreseller/lib/PanelDnsResellerService.php` — API service layer
 - `modules/servers/paneldnsreseller/lib/PanelDnsResellerHooks.php` — hook logic
 - `modules/servers/paneldnsreseller/lib/PanelDnsResellerMigration.php` — module-name migration

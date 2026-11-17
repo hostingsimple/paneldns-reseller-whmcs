@@ -114,6 +114,15 @@ If the email is missing: verify the template exists at
 2. ✅ Expected: sub-client status in PanelDNS becomes "suspended"
 3. Unsuspend the service
 4. ✅ Expected: sub-client status returns to "active"
+5. Suspend the service again with the reason `Abuse test`. Create an Add Funds invoice
+   for the test client, or any invoice that is not for this service, and mark it paid
+6. ✅ Expected: the service stays Suspended in WHMCS and the sub-client stays "suspended"
+   in PanelDNS (v1.9.5: the module has no invoice hook). Unsuspend it by hand afterwards
+7. Optional, with **Enable Suspension** and **Enable Unsuspension** on in Automation
+   Settings: give the service an overdue invoice and let the WHMCS cron suspend it
+   ("Overdue on Payment"), then mark that invoice paid
+8. ✅ Expected: WHMCS unsuspends the service at once, the Module Log shows
+   `UnsuspendAccount`, and the sub-client returns to "active"
 
 ---
 

@@ -51,6 +51,14 @@ if (!function_exists('decrypt')) {
     function decrypt(string $s): string { return $s; } // stub — no encryption in tests
 }
 
+if (!function_exists('add_hook')) {
+    /** Records hooks.php's registrations so a test can fire them ($GLOBALS['__hooks'][$point]). */
+    function add_hook(string $point, int $priority, callable $fn): void
+    {
+        $GLOBALS['__hooks'][$point][] = $fn;
+    }
+}
+
 require __DIR__ . '/Support/FakeCapsule.php';
 
 // The embedded manager starts a PHP session if none is active (WHMCS always has one).
