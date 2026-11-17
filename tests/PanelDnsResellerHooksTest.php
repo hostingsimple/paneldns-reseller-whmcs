@@ -94,7 +94,10 @@ final class PanelDnsResellerHooksTest extends TestCase
     /** Runs the cron against one row, with DELETE answering $deleteResponse. */
     private function runGraceCron(object $row, array $deleteResponse): FakeApi
     {
-        $api = (new FakeApi())->on('DELETE', '/api/v1/sub-clients/' . (int) $row->sub_client_id, $deleteResponse);
+        $api = (new FakeApi())
+            // TERM-ZONES-01 (v1.9.6): the cron lists (and deletes) the zones first; none here.
+            ->on('GET', '/api/v1/zones', FakeApi::json(200, ['ok' => true, 'data' => [], 'meta' => ['page' => 1, 'per_page' => 50, 'total' => 0]]))
+            ->on('DELETE', '/api/v1/sub-clients/' . (int) $row->sub_client_id, $deleteResponse);
         PanelDnsResellerHooks::$apiFactory = fn () => $api;
         Capsule::$handler = fn (FakeQuery $q, string $op) => $op === 'get' ? [$row] : null;
 

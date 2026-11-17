@@ -517,6 +517,7 @@ class PanelDnsResellerHooks
                 if ($deadline === null || $deadline > $today) continue; // no marker / not yet expired
 
                 $subClientId = (int) $svc->sub_client_id;
+                $zones       = ['deleted' => 0];
 
                 // NO-EMAIL-LINK-02 (v1.9.4): CreateAccount no longer re-links a re-order to
                 // the client's old sub-client, so that is now an admin step (Dedicated IP +
@@ -538,7 +539,16 @@ class PanelDnsResellerHooks
 
                 if ($subClientId > 0) {
                     try {
-                        $resp = self::apiForServer($svc)->deleteSubClient($subClientId);
+                        $api = self::apiForServer($svc);
+                        // TERM-ZONES-01 (v1.9.6): the zones first; a failure keeps the
+                        // marker so the next cron retries.
+                        $zones = self::deleteSubClientZones($api, $subClientId);
+                        if (!$zones['ok']) {
+                            logActivity('PanelDNS grace delete postponed for sub-client ' . $subClientId
+                                . ' (service #' . $svc->service_id . '): ' . $zones['error'] . '. Will retry on the next cron.');
+                            continue;
+                        }
+                        $resp = $api->deleteSubClient($subClientId);
                     } catch (\Throwable $e) {
                         logActivity('PanelDNS grace delete failed for service #' . $svc->service_id
                             . ' (' . get_class($e) . ')');
@@ -564,11 +574,63 @@ class PanelDnsResellerHooks
                 } catch (\Throwable $e) { /* swallow */ }
 
                 logActivity("PanelDNS: grace period expired, deleted sub-client {$subClientId}"
-                    . " (service #{$svc->service_id})");
+                    . ' and ' . (int) $zones['deleted'] . " zone(s) (service #{$svc->service_id})");
             }
         } catch (\Throwable $e) {
             logActivity('PanelDNS grace period cron error (' . get_class($e) . ')');
         }
+    }
+
+    /** TERM-ZONES-01: zones are listed 50 per page; 100 pages = 5,000 zones per sub-client. */
+    const TERMINATE_ZONES_MAX_PAGES = 100;
+
+    /**
+     * TERM-ZONES-01 (v1.9.6): delete every zone of a sub-client. Called before the
+     * sub-client itself is deleted, by TerminateAccount and the grace-period cron.
+     *
+     * PanelDNS's DELETE /api/v1/sub-clients/{id} deletes only the sub-client row; the zones
+     * FK is nullOnDelete, so up to 1.9.5 every zone of a terminated customer stayed live
+     * at the DNS provider as an org-level zone, and the name stayed blocked for whoever
+     * legitimately took the domain next. Each zone goes through DELETE /api/v1/zones/{id}
+     * (ZoneManager::deleteZone, which removes it at the provider).
+     *
+     * Stops at the first failure so the caller can keep the sub-client (and retry): a
+     * listing error, a listing cut short, or a zone delete that is refused. A 404 on a
+     * zone means it is already gone. Only zones whose sub_client_id is this sub-client
+     * are deleted, so a server that ignores the filter cannot take other zones with it.
+     *
+     * @return array{ok:bool, deleted:int, error:?string}
+     */
+    public static function deleteSubClientZones(PanelDnsResellerApi $api, int $subClientId): array
+    {
+        if ($subClientId <= 0) {
+            return ['ok' => true, 'deleted' => 0, 'error' => null];
+        }
+
+        $list = $api->getAllPages('/api/v1/zones', ['sub_client_id' => $subClientId], self::TERMINATE_ZONES_MAX_PAGES);
+        if (!$list['ok']) {
+            return ['ok' => false, 'deleted' => 0, 'error' => 'listing its zones failed: ' . ($list['error'] ?? 'unknown error')];
+        }
+        if (!empty($list['truncated'])) {
+            return ['ok' => false, 'deleted' => 0, 'error' => 'it has more zones than one run can list ('
+                . count($list['data']) . ' of ' . (int) ($list['total'] ?? 0) . ')'];
+        }
+
+        $deleted = 0;
+        foreach ($list['data'] as $zone) {
+            if (!is_array($zone) || (int) ($zone['sub_client_id'] ?? 0) !== $subClientId) continue;
+            $zoneId = (int) ($zone['id'] ?? 0);
+            if ($zoneId <= 0) continue;
+
+            $del = $api->delete('/api/v1/zones/' . $zoneId);
+            if (!($del['ok'] ?? false) && (int) ($del['status'] ?? 0) !== 404) {
+                $name = preg_replace('/[^a-z0-9._-]/i', '', (string) ($zone['name'] ?? ''));
+                return ['ok' => false, 'deleted' => $deleted, 'error' => "deleting zone {$name} (#{$zoneId}) failed: "
+                    . substr((string) ($del['error'] ?? 'unknown error'), 0, 200)];
+            }
+            $deleted++;
+        }
+        return ['ok' => true, 'deleted' => $deleted, 'error' => null];
     }
 
     /**

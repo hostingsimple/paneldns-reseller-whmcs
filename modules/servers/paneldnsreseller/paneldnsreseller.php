@@ -15,7 +15,8 @@
  *   - WHMCS Create → POST /api/v1/sub-clients
  *   - WHMCS Suspend → PATCH /api/v1/sub-clients/{id} {status: suspended}
  *   - WHMCS Unsuspend → PATCH … {status: active}
- *   - WHMCS Terminate → DELETE /api/v1/sub-clients/{id}
+ *   - WHMCS Terminate → DELETE /api/v1/zones/{id} for each of its zones, then
+ *     DELETE /api/v1/sub-clients/{id} (TERM-ZONES-01, v1.9.6)
  *   - WHMCS ChangePackage → PATCH … {zone_limit, max_records}
  *   - "Login to PanelDNS Portal" → POST /api/v1/sub-clients/{id}/sso-token → 302
  *

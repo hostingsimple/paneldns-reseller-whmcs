@@ -546,6 +546,9 @@ class PanelDnsResellerService
             // GRACE-01: suspend instead of delete. DailyCronJob processes the
             // actual deletion once the deadline passes. Terminated WHMCS services
             // are excluded from PanelDnsResellerDriftSync so the suspension is not reversed.
+            // TERM-ZONES-01: the zones are deleted with the sub-client when the period
+            // ends. Until then they keep resolving: the reseller API has no call that
+            // takes a sub-client's zones offline without deleting them.
             $resp = $this->api->patchSubClient($id, ['status' => 'suspended']);
             if (!$resp['ok']) return $resp['error'] ?: 'Grace-period suspend failed.';
 
@@ -559,6 +562,16 @@ class PanelDnsResellerService
                     ->update(['notes' => PanelDnsResellerHooks::withGraceMarker($notes, $deadline)]);
             } catch (\Throwable $e) { /* swallow — grace still applied in PanelDNS */ }
             return 'success';
+        }
+
+        // TERM-ZONES-01 (v1.9.6): delete the sub-client's zones first. PanelDNS deletes only
+        // the sub-client row and keeps its zones live as org-level zones. On a failure the
+        // sub-client is kept, so running Terminate again picks up where this stopped.
+        $zones = PanelDnsResellerHooks::deleteSubClientZones($this->api, $id);
+        if (!$zones['ok']) {
+            return "PanelDNS: sub-client #{$id} was not deleted because {$zones['error']}"
+                . ($zones['deleted'] > 0 ? " ({$zones['deleted']} zone(s) were deleted)" : '')
+                . '. Run Terminate again.';
         }
 
         $resp = $this->api->deleteSubClient($id);
