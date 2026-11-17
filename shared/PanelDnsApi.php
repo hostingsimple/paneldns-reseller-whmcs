@@ -684,12 +684,12 @@ class PanelDnsResellerApi
         // literal strings it is given, so it masked those words and no secret at all.
         // It now receives the secret VALUES: the API key plus every value found under a
         // secret-looking key.
+        // LOG-REDACT-01 (v1.9.6, ported from paneldns-whmcs 1.1.4): login_url / sso_url
+        // values are redacted whole (they ARE the login), a token cut from any string is
+        // masked too, and short values are not used as replace vars.
         $secrets = [];
         $request  = self::scrub($body ?? [], $secrets);
-        $response = self::scrubResponse($rawResponse, $secrets);
-        if ($this->apiKey !== '') {
-            $secrets[] = $this->apiKey;
-        }
+        $response = self::redactResponse($rawResponse, $secrets);
 
         logModuleCall(
             'paneldns',
@@ -698,12 +698,41 @@ class PanelDnsResellerApi
             $request,
             ['status' => $status, 'response' => $this->truncate($response, 4096), 'curl_error' => $curlError],
             null,
-            array_values(array_unique(array_filter($secrets, fn ($s) => is_string($s) && strlen($s) >= 4)))
+            $this->replaceVars($secrets)
         );
     }
 
-    /** Keys whose values are never logged, at any depth. */
-    const SECRET_KEY_PATTERN = '/pass(?:word|phrase)?|secret|token|api[_-]?key|authori[sz]ation|access[_-]?hash|private[_-]?key/i';
+    /**
+     * LOG-REDACT-01: shortest secret passed to logModuleCall() as a replace var. Shorter
+     * values are already redacted by key; masking every occurrence of a short string
+     * would mangle the rest of the log entry.
+     */
+    const MIN_REPLACE_VAR_LENGTH = 8;
+
+    /**
+     * LOG-SCRUB-01 / LOG-REDACT-01: logModuleCall()'s 6th argument is "an array of strings
+     * for replacement": the secret VALUES WHMCS masks wherever they appear in the entry
+     * (developers.whmcs.com/provisioning-modules/module-logging) — the API key plus every
+     * value scrub()/redactResponse() removed. Never key names.
+     *
+     * @param list<mixed> $secrets
+     * @return list<string>
+     */
+    private function replaceVars(array $secrets): array
+    {
+        $vars = [];
+        foreach (array_merge([$this->apiKey], $secrets) as $v) {
+            if (is_string($v) && strlen($v) >= self::MIN_REPLACE_VAR_LENGTH) $vars[$v] = true;
+        }
+        return array_keys($vars);
+    }
+
+    /**
+     * Keys whose values are never logged, at any depth. LOG-REDACT-01 (v1.9.6): also
+     * login_url / sso_url — POST /sub-clients/{id}/sso-token's `/sso/consume?token=…` is a
+     * live portal login for 60 seconds, so the whole URL goes, not only its token.
+     */
+    const SECRET_KEY_PATTERN = '/pass(?:word|phrase)?|secret|token|api[_-]?key|authori[sz]ation|access[_-]?hash|private[_-]?key|login[_-]?url|sso[_-]?url/i';
 
     /**
      * LOG-SCRUB-01: a copy of $data with every secret-looking key's value replaced by
@@ -718,8 +747,17 @@ class PanelDnsResellerApi
             $out = [];
             foreach ($data as $k => $v) {
                 if (is_string($k) && preg_match(self::SECRET_KEY_PATTERN, $k)) {
-                    if (is_string($v) && $v !== '') {
-                        $found[] = $v;
+                    // LOG-REDACT-01: every string under the key (a list of tokens too), and a
+                    // login URL's token on its own, in case WHMCS logs it elsewhere.
+                    $values = is_array($v) ? [] : [$v];
+                    if (is_array($v)) {
+                        array_walk_recursive($v, function ($leaf) use (&$values) { $values[] = $leaf; });
+                    }
+                    foreach ($values as $value) {
+                        if (!is_string($value) || $value === '') continue;
+                        $found[] = $value;
+                        parse_str((string) parse_url($value, PHP_URL_QUERY), $q);
+                        if (is_string($q['token'] ?? null) && $q['token'] !== '') $found[] = $q['token'];
                     }
                     $out[$k] = '[REDACTED]';
                 } elseif ($k === 'zone_file' && is_string($v)) {
@@ -731,30 +769,51 @@ class PanelDnsResellerApi
             }
             return $out;
         }
-        return is_string($data) ? self::scrubString($data) : $data;
+        return is_string($data) ? self::scrubString($data, $found) : $data;
     }
 
-    /** Secret query parameters (?token=…, &password=…) inside any string. */
-    private static function scrubString(string $s): string
+    /**
+     * Secret parameters (token=…, password=…, key=…) anywhere in a string — a query
+     * string, a URL under another key, an HTML error page. LOG-REDACT-01: matched at any
+     * position not inside a longer word (up to 1.9.5 only after ? or &), and every value
+     * cut is added to $found so WHMCS masks it elsewhere too.
+     */
+    private static function scrubString(string $s, array &$found = []): string
     {
-        return (string) preg_replace(
-            '/([?&](?:token|password|secret|api_key|apikey|key)=)[^&"\s\\\\]*/i',
-            '$1[REDACTED]',
+        return (string) preg_replace_callback(
+            '/(?<![A-Za-z0-9_])((?:access_token|api_key|apikey|token|key|password|secret)=)([^&"\'\s<>\\\\]+)/i',
+            static function (array $m) use (&$found): string {
+                if ($m[2] !== '[REDACTED]') {
+                    $found[] = rawurldecode($m[2]);
+                    $found[] = $m[2];
+                }
+                return $m[1] . '[REDACTED]';
+            },
             $s
         );
     }
 
-    /** The raw response with the same scrubbing — decoded and re-encoded when JSON. */
-    private static function scrubResponse(?string $raw, array &$found): ?string
+    /**
+     * LOG-SCRUB-01 / LOG-REDACT-01: the response body as it may be logged. JSON is decoded,
+     * scrubbed and re-encoded; a body that cannot be re-encoded is not logged (never the
+     * raw body — it is what carries the secret). Then secret parameters are cut from
+     * what remains (non-JSON bodies, URLs under other keys). Every value removed is added
+     * to $found.
+     *
+     * @internal public for unit tests.
+     */
+    public static function redactResponse(?string $raw, array &$found = []): ?string
     {
         if ($raw === null || $raw === '') {
             return $raw;
         }
         $decoded = json_decode($raw, true);
         if (is_array($decoded)) {
-            return (string) json_encode(self::scrub($decoded, $found), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $encoded = json_encode(self::scrub($decoded, $found),
+                JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+            return is_string($encoded) ? $encoded : '{"redacted":"response not logged"}';
         }
-        return self::scrubString($raw);
+        return self::scrubString($raw, $found);
     }
 
     private function truncate(?string $s, int $max): ?string

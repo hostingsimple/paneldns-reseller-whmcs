@@ -204,9 +204,12 @@ final class PanelDnsApiBehaviourTest extends TestCase
         $r = $api->mintSubClientSsoToken(5);
         $this->assertStringContainsString('LIVE-ONE-TIME-TOKEN', $r['data']['login_url'], 'callers still get the real URL');
 
-        $logged = json_encode($GLOBALS['__module_log']);
+        // What the entry shows (not the 6th argument, which lists the values to mask).
+        $logged = json_encode(array_map(fn (array $c) => array_slice($c, 0, 5), $GLOBALS['__module_log']));
         $this->assertStringNotContainsString('LIVE-ONE-TIME-TOKEN', $logged);
-        $this->assertStringContainsString('token=[REDACTED]', $logged);
+        // LOG-REDACT-01 (v1.9.6): the whole login URL goes, not only its token.
+        $this->assertStringNotContainsString('sso\/consume', $logged);
+        $this->assertSame('[REDACTED]', json_decode($GLOBALS['__module_log'][0][3]['response'], true)['data']['login_url']);
     }
 
     // ── Paging (finding 7) ─────────────────────────────────────────────────────
