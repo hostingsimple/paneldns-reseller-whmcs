@@ -107,11 +107,77 @@ final class DriftSyncTest extends TestCase
     {
         $api = $this->api(1, [42 => 'active']);
 
-        $this->sync([self::row(500, 42, 'Pending')]);
+        $stats = $this->sync([self::row(500, 42, 'Pending')]);
 
         $this->assertSame([], self::statusWrites());
         $this->assertSame([], $api->callsTo('PATCH', '/api/v1/sub-clients/42'));
-        $this->assertStringContainsString('service #500 is Pending in WHMCS but sub-client 42 is active in PanelDNS', self::activity());
+        $this->assertStringContainsString('drift reported, not applied: WHMCS is the source of truth', self::activity());
+        $this->assertStringContainsString('"service_id":500,"sub_client_id":42,"would_be":"Active"', self::activity());
+        $this->assertSame(1, $stats['reported']);
+    }
+
+    /** As paneldns-whmcs 1.1.4: any mismatch that would not tighten WHMCS is reported, never applied. */
+    public function test_a_non_tightening_mismatch_is_reported_not_applied(): void
+    {
+        $this->api(1, [41 => 'suspended', 42 => 'cancelled']);
+
+        $stats = $this->sync([self::row(500, 41, 'Pending'), self::row(501, 42, 'Completed')]);
+
+        $this->assertSame([], Capsule::ops('update', 'tblhosting'));
+        $this->assertSame(2, $stats['reported']);
+        $this->assertStringContainsString('"would_be":"Suspended"', self::activity());
+        $this->assertStringContainsString('"would_be":"Terminated"', self::activity());
+    }
+
+    /** ID-STRICT-01 (ported from paneldns-whmcs 1.1.4): an IP address in Dedicated IP is not sub-client 203. */
+    public function test_a_dedicated_ip_that_is_not_an_id_is_skipped(): void
+    {
+        $api = $this->api(1, [203 => 404, 42 => 'active']);
+
+        $this->sync([
+            self::row(500, 0, 'Active'),
+            (object) ['service_id' => 501, 'domainstatus' => 'Active', 'paneldns_id' => '203.0.113.5', 'server_id' => 1, 'notes' => '', 'servertype' => 'paneldnsreseller'],
+            (object) ['service_id' => 502, 'domainstatus' => 'Active', 'paneldns_id' => ' 42 ', 'server_id' => 1, 'notes' => '', 'servertype' => 'paneldnsreseller'],
+        ]);
+
+        $this->assertSame([], $api->callsTo('GET', '/api/v1/sub-clients/203'), 'no lookup of sub-client 203');
+        $this->assertCount(1, $api->callsTo('GET', '/api/v1/sub-clients/42'), 'a padded plain id is still read');
+        $this->assertSame([], Capsule::ops('update', 'tblhosting'));
+    }
+
+    /** @dataProvider idProvider */
+    public function test_parse_id_accepts_only_a_plain_positive_whole_number($value, ?int $expected): void
+    {
+        $this->assertSame($expected, PanelDnsResellerDriftSync::parseId($value));
+    }
+
+    public static function idProvider(): array
+    {
+        return [
+            'id'            => ['42', 42],
+            'padded'        => [' 42 ', 42],
+            'int'           => [42, 42],
+            'leading zeros' => ['007', 7],
+            'IP address'    => ['203.0.113.5', null],
+            'zero'          => ['0', null],
+            'negative'      => ['-5', null],
+            'empty'         => ['', null],
+            'null'          => [null, null],
+            'overflow'      => ['99999999999999999999', null],
+            'hex'           => ['0x1A', null],
+        ];
+    }
+
+    public function test_a_rate_limit_stops_the_run(): void
+    {
+        $api = $this->api(1, [41 => 429, 42 => 'suspended']);
+
+        $stats = $this->sync([self::row(500, 41, 'Active'), self::row(501, 42, 'Active')]);
+
+        $this->assertCount(1, $api->calls, 'no further calls once PanelDNS said slow down');
+        $this->assertSame([], Capsule::ops('update', 'tblhosting'));
+        $this->assertSame(0, $stats['checked']);
+        $this->assertStringContainsString('drift sync stopped early: PanelDNS rate limit', self::activity());
     }
 
     /** @dataProvider restrictiveProvider */
@@ -138,11 +204,12 @@ final class DriftSyncTest extends TestCase
 
     public function test_no_combination_ever_makes_a_service_less_restricted(): void
     {
+        $report  = [null, 'report:Active', 'report:Suspended', 'report:Terminated'];
         $allowed = [
             'Active'    => [null, 'whmcs:Suspended', 'whmcs:Terminated'],
             'Suspended' => [null, 'upstream:suspend', 'whmcs:Terminated'],
-            'Pending'   => [null, 'review'],
-            'Completed' => [null, 'review'],
+            'Pending'   => $report,
+            'Completed' => $report,
         ];
         foreach ($allowed as $whmcs => $actions) {
             foreach (['active', 'suspended', 'cancelled', 'unknown'] as $remote) {
