@@ -40,7 +40,8 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
 - **Zone health widget** — clients see any non-active zones flagged at the top of
   their client area so they spot problems immediately
 - **Bulk sub-client sync** — a server-level button provisions all existing WHMCS
-  clients in one run; idempotent (safe to re-run at any time)
+  clients in one run; idempotent (safe to re-run at any time). A client whose email
+  already has a PanelDNS sub-client is listed for review and never linked automatically
 - **Daily drift sync** — a background job keeps WHMCS and PanelDNS statuses in sync
   and catches any divergence between the two systems
 - **Client profile sync** — name changes in WHMCS are pushed to PanelDNS automatically
@@ -55,9 +56,10 @@ your [PanelDNS](https://paneldns.com) reseller account — no manual steps requi
   or unprovisioned services
 - **One account per client email** — PanelDNS allows one sub-client per email in an
   organisation. A second DNS order by the same client gets a clear "upgrade the
-  existing service" message instead of a bare HTTP 422; a re-order after termination
-  is linked back to the client's existing sub-client. An existing sub-client is never
-  linked on email alone (see INSTALL.md → Troubleshooting)
+  existing service" message instead of a bare HTTP 422, and every other duplicate-email
+  case (including a re-order after termination) fails with a message naming the existing
+  sub-client and its service. An existing sub-client is never linked on email — the admin
+  links it by hand after checking (see INSTALL.md → Troubleshooting)
 - **Readable errors and rate-limit handling** — PanelDNS validation messages, "API
   switched off" and IP-allowlist refusals are shown as PanelDNS words them; a 429 is
   reported with its retry time and no further calls are made until it passes
@@ -139,7 +141,7 @@ product-level Zone Limit only if it is not set.
 
 | Button | What it does |
 |---|---|
-| Bulk Sync Sub-clients | Provisions or links all Active/Suspended services on this server to PanelDNS sub-clients in one run |
+| Bulk Sync Sub-clients | Creates PanelDNS sub-clients for all unprovisioned Active/Suspended services on this server in one run; services whose client email already has a sub-client are listed for review, never linked |
 | List Accounts / Sync | Built-in WHMCS tool — compares all sub-clients returned by the module against WHMCS services to surface orphaned or unprovisioned accounts |
 
 ---
@@ -180,8 +182,14 @@ build.php                              builds dist/paneldns-reseller-whmcs-X.Y.Z
   cURL is IPv4-only with TLS verification on.
 - Network-level error text (hostnames, IPs, TLS detail) stays in the module log; WHMCS
   screens and the client area show a generic line.
-- An existing PanelDNS sub-client is never linked to a new order on email alone, and only
-  ever within the token's own organisation.
+- **No account linking by email (v1.9.4).** WHMCS does not verify client email addresses,
+  so a service is linked only to the sub-client id PanelDNS issued for it, kept in the
+  service's admin-only Dedicated IP field. SSO, suspend, terminate and the embedded DNS
+  manager act on that id alone. A duplicate-email order fails with a message instead of
+  adopting the existing sub-client, Bulk Sync reports email matches for review instead of
+  linking them, and no client-fillable field (such as a product custom field) is read as
+  the sub-client id. Linking an existing sub-client is always a per-service admin step.
+- The nightly grace-period delete skips a sub-client that a live service now uses.
 
 ---
 

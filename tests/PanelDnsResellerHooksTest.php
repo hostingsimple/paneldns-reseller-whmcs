@@ -169,6 +169,34 @@ final class PanelDnsResellerHooksTest extends TestCase
         $this->assertCount(1, Capsule::ops('update', 'tblhosting'));
     }
 
+    public function test_grace_cron_never_deletes_a_sub_client_a_live_service_now_uses(): void
+    {
+        // NO-EMAIL-LINK-02: a re-order is re-linked by the admin (Dedicated IP + Create),
+        // which leaves the old terminated service's grace marker behind.
+        $row = $this->graceRow('2000-01-01');
+        $api = (new FakeApi())->on('DELETE', '/api/v1/sub-clients/42', FakeApi::json(200, ['ok' => true]));
+        PanelDnsResellerHooks::$apiFactory = fn () => $api;
+        Capsule::$handler = function (FakeQuery $q, string $op) use ($row) {
+            if ($op === 'get') return [$row];
+            if ($op === 'first' && $q->hasWhere('tblhosting.dedicatedip', '=', '42')) return (object) ['id' => 600];
+            return null;
+        };
+
+        PanelDnsResellerHooks::processExpiredGracePeriods();
+
+        $this->assertSame([], $api->callsTo('DELETE', '/api/v1/sub-clients/42'));
+        $updates = Capsule::ops('update', 'tblhosting');
+        $this->assertCount(1, $updates);
+        $this->assertSame(['notes' => 'keep me'], $updates[0]->arg, 'stale marker removed');
+        $this->assertStringContainsString('now used by live service #600', implode("\n", $GLOBALS['__activity_log']));
+
+        $guard = Capsule::ops('first', 'tblhosting')[0];
+        $this->assertTrue($guard->hasWhere('tblproducts.servertype', 'in', PanelDnsResellerHooks::SERVERTYPES));
+        $this->assertTrue($guard->hasWhere('tblhosting.id', '!=', 9));
+        $this->assertTrue($guard->hasWhere('tblhosting.domainstatus', 'not in', ['Terminated', 'Cancelled', 'Fraud']));
+        $this->assertTrue($guard->hasWhere('tblservers.hostname', '=', 'paneldns.test'));
+    }
+
     public function test_grace_cron_skips_future_deadlines(): void
     {
         $api = $this->runGraceCron($this->graceRow(date('Y-m-d', strtotime('+3 days'))), FakeApi::json(200, ['ok' => true]));
@@ -235,7 +263,7 @@ final class PanelDnsResellerHooksTest extends TestCase
     {
         $src = (string) file_get_contents(__DIR__ . '/../modules/servers/paneldnsreseller/lib/PanelDnsResellerHooks.php');
         $this->assertDoesNotMatchRegularExpression("/servertype',\s*'paneldns[-_]reseller'/", $src);
-        $this->assertSame(5, substr_count($src, "->whereIn('tblproducts.servertype', self::SERVERTYPES)"));
+        $this->assertSame(6, substr_count($src, "->whereIn('tblproducts.servertype', self::SERVERTYPES)"));
         $this->assertSame('paneldnsreseller', PanelDnsResellerHooks::MODULE);
         // The filters match the legacy names until migrated, and never a platform name.
         $this->assertSame(

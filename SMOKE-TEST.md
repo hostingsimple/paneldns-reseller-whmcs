@@ -166,6 +166,22 @@ If the email is missing: verify the template exists at
 
 ---
 
+## 13c — No linking by email (v1.9.4)
+
+1. Create a second WHMCS test client whose email is the first test client's email in a
+   different case (or, if WHMCS refuses, create a sub-client by hand in PanelDNS with an
+   email the second client uses). Give it an **Active** PanelDNS service with an empty
+   Dedicated IP.
+2. Click **Bulk Sync Sub-clients** on the server
+3. ✅ Expected: `Needs review (not linked): 1 … service #N: sub-client #M has this
+   client's email` — and the service's Dedicated IP stays empty; **Login to PanelDNS** on
+   it says "Service not provisioned yet."
+4. Run **Create** on that service
+5. ✅ Expected: it fails with a message naming sub-client #M; Dedicated IP stays empty
+6. Delete the second test client and service
+
+---
+
 ## 14 — Terminate
 
 1. Terminate the test service in WHMCS Admin

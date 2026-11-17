@@ -268,17 +268,24 @@ provisioned before this module was installed, use the bulk sync to catch them up
 The sync will:
 - **Skip** services that already have a sub-client ID (already provisioned — safe to
   re-run at any time)
-- **Link** services whose client email exactly matches an existing PanelDNS sub-client
-  that no other live service uses (no duplicate created). Bulk Sync is your own admin
-  action, so it trusts the email match; automatic provisioning (CreateAccount) does not
-  — see "This client already has a PanelDNS account" below.
+- **Report, never link,** services whose client email exactly matches an existing
+  PanelDNS sub-client. WHMCS does not verify client email addresses, so a matching email
+  does not prove the client owns that sub-client — linking it would let them sign in as
+  its real owner. These are listed under **Needs review** with the service and
+  sub-client ids. To link one, first confirm the sub-client belongs to that client, then
+  enter the sub-client ID in the service's **Dedicated IP** field and run **Create**.
 - **Create** sub-clients for services with no match in PanelDNS
 - **Stop early** if PanelDNS rate-limits the run — click the button again a minute later
 
 The result is shown immediately, e.g.:
 ```
-Created: 12 | Linked: 3 | Skipped (already provisioned): 47
+Created: 12 | Needs review (not linked): 1 | Skipped (already provisioned): 47 | Review: service #812: sub-client #77 has this client's email. These were NOT linked …
 ```
+
+> **Upgrading from 1.9.3 or earlier:** older versions of Bulk Sync linked email matches
+> automatically. Check any service it reported as **Linked**: the admin service tab shows
+> the sub-client email — clear Dedicated IP on any service whose sub-client is not that
+> client's.
 
 > **Note:** Welcome emails are not sent during bulk sync. If you want clients to
 > receive login details, send them manually or trigger a re-send from each service.
@@ -447,12 +454,17 @@ Sub-client IDs stored on services (`tblhosting.dedicatedip`) are not touched.
 - **"PanelDNS already has a sub-client with this email … no WHMCS service is linked
   to it"** — a sub-client with the client's email exists (e.g. created by hand in
   PanelDNS). It is not linked automatically, because WHMCS does not verify client
-  email addresses. If the client owns it, enter the sub-client ID in the service's
-  **Dedicated IP** field and run **Create** again (it is re-activated with the
-  product's limits), or use **Bulk Sync** (Step 7).
-- A re-order by the **same** client after their previous service was terminated is
-  linked back to their existing sub-client automatically, and any pending
-  grace-period deletion of it is cancelled.
+  email addresses. If you have confirmed the client owns it, enter the sub-client ID in
+  the service's **Dedicated IP** field and run **Create** again (it is re-activated with
+  the product's limits).
+- **"… was used by this client's terminated service #N"** — a re-order after
+  cancellation. Since 1.9.4 this is not re-linked automatically (the old link may itself
+  have been made on email). If it is the same customer's account, enter the sub-client ID
+  in Dedicated IP and run **Create**; the old service's pending grace-period deletion is
+  skipped once a live service uses the sub-client.
+- The sub-client ID is only ever read from **Dedicated IP**. A product custom field named
+  `paneldns_sub_client_id` (read before 1.9.4) is ignored — clients can fill in custom
+  fields on the order form.
 - **"PanelDNS rate limit reached (retry in N seconds)"** — see
   [Rate limits](#rate-limits); run Create again after the wait.
 
@@ -478,7 +490,8 @@ Sub-client IDs stored on services (`tblhosting.dedicatedip`) are not touched.
 - The sub-client ID is stored in the service's `Dedicated IP` field. If it's blank
   the service was never successfully provisioned.
 - Try clicking **Resync Status** — if that also fails, re-run **Create** from the
-  Module Commands tab or use **Bulk Sync** from the server page.
+  Module Commands tab or use **Bulk Sync** from the server page (which creates a
+  sub-client, or lists an existing one with the same email for you to check).
 
 ---
 

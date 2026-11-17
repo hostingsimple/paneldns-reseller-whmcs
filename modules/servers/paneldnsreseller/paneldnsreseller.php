@@ -39,7 +39,7 @@ if (!defined('WHMCS')) {
  * Bump this in lockstep with the repo release tag.
  */
 if (!defined('PANELDNS_RESELLER_MODULE_VERSION')) {
-    define('PANELDNS_RESELLER_MODULE_VERSION', '1.9.3');
+    define('PANELDNS_RESELLER_MODULE_VERSION', '1.9.4');
 }
 
 require_once __DIR__ . '/lib/PanelDnsResellerService.php';
@@ -194,8 +194,10 @@ function paneldnsreseller_ServerCustomButtonArray(): array
 
 /**
  * Bulk sync all Active/Suspended services on this server to PanelDNS
- * sub-clients. Idempotent: existing sub-clients (identified by email)
- * are linked rather than duplicated. Capped at 200 services per run.
+ * sub-clients. Creates a sub-client for each unprovisioned service; a service
+ * whose client email already has a sub-client is listed for review and NEVER
+ * linked (NO-EMAIL-LINK-01, v1.9.4 — WHMCS does not verify emails). Idempotent;
+ * capped at 200 services per run.
  */
 function paneldnsreseller_bulkSync(array $params): string
 {
