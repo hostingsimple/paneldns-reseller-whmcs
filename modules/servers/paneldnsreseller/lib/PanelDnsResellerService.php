@@ -1113,6 +1113,92 @@ class PanelDnsResellerService
         return is_string($a) ? $a : '';
     }
 
+    /**
+     * WHMCS-PERM-01 (v1.9.6): the WHMCS user permission that allows a user to open the
+     * DNS portal and to use the embedded DNS manager: "Perform Single Sign-On"
+     * (`productsso`), the permission WHMCS itself requires for ServiceSingleSignOn. Both
+     * give the same power (the portal can do everything the embedded manager does), so
+     * one permission gates both.
+     */
+    const MANAGE_PERMISSION = 'productsso';
+
+    const MSG_NO_PERMISSION = 'Your user account does not have permission to manage DNS for this service.'
+        . ' The account owner can grant it under Account → User Management (Perform Single Sign-On).';
+
+    /**
+     * WHMCS-PERM-01 (v1.9.6): may the signed-in WHMCS user manage this service's DNS?
+     *
+     * WHMCS 8 accounts can have several users with per-user permissions. WHMCS checks
+     * `productsso` before its own Login button runs ServiceSingleSignOn, but the module's
+     * in-template portal button (?customAction=sso) and the embedded DNS manager ran for
+     * anyone who could open the product page, so a user invited with view-only access got
+     * a full portal login and could delete zones.
+     *
+     * Checked with the documented WHMCS APIs: \WHMCS\Authentication\CurrentUser user() and
+     * client() (https://developers.whmcs.com/advanced/authentication/), Client::isOwnedBy()
+     * (https://developers.whmcs.com/classes/whmcs/user/client/) — the owner holds every
+     * permission — and for any other user localAPI GetUserPermissions(user_id, client_id)
+     * (https://developers.whmcs.com/api-reference/getuserpermissions/), whose permission
+     * names are those of GetPermissionsList. Fails closed: no user, another client
+     * account, an API error or an unreadable answer all refuse.
+     */
+    public static function userMayManage(array $params): bool
+    {
+        $clientId = (int) ($params['userid'] ?? 0);
+        if ($clientId <= 0 || !class_exists('\\WHMCS\\Authentication\\CurrentUser')) {
+            return false;
+        }
+        try {
+            $current = new \WHMCS\Authentication\CurrentUser();
+            $user    = $current->user();
+            $client  = $current->client();
+            if (!$user || !$client || (int) $client->id !== $clientId) {
+                return false;
+            }
+            if ($client->isOwnedBy($user)) {
+                return true;
+            }
+            $resp = localAPI('GetUserPermissions', ['user_id' => (int) $user->id, 'client_id' => $clientId]);
+            if (!is_array($resp) || ($resp['result'] ?? '') !== 'success') {
+                return false;
+            }
+            return in_array(self::MANAGE_PERMISSION, self::permissionNames($resp['permissions'] ?? null), true);
+        } catch (\Throwable $e) {
+            if (function_exists('logModuleCall')) {
+                logModuleCall(self::MODULE, 'error:userMayManage', ['client_id' => $clientId], get_class($e), '');
+            }
+            return false;
+        }
+    }
+
+    /**
+     * WHMCS-PERM-01: permission names from a GetUserPermissions answer — a list, a
+     * comma-separated string, a nested list or a name => true map.
+     *
+     * @return string[]
+     * @internal public for unit tests.
+     */
+    public static function permissionNames($raw): array
+    {
+        if (is_string($raw)) {
+            $raw = [$raw];
+        }
+        if (!is_array($raw)) {
+            return [];
+        }
+        $out = [];
+        array_walk_recursive($raw, function ($v, $k) use (&$out) {
+            if (is_string($k) && ($v === true || $v === 1 || $v === '1')) {
+                $out[] = strtolower(trim($k));
+            } elseif (is_string($v)) {
+                foreach (explode(',', $v) as $name) {
+                    $out[] = strtolower(trim($name));
+                }
+            }
+        });
+        return array_values(array_unique(array_filter($out, fn ($n) => $n !== '')));
+    }
+
     public static function clientArea(array $params): array
     {
         // T1.4: dispatch on customAction to either the embedded DNS
@@ -1130,6 +1216,16 @@ class PanelDnsResellerService
                 'templatefile' => 'templates/client/overview',
                 'vars' => ['paneldns_error' => 'DNS service is temporarily unavailable.', 'paneldns_nameservers' => []],
             ];
+        }
+
+        // WHMCS-PERM-01 (v1.9.6): the portal button and every embedded DNS page and form
+        // need the user's "Perform Single Sign-On" permission; anyone else gets the
+        // read-only overview.
+        $mayManage = self::userMayManage($params);
+        $notice    = null;
+        if (!$mayManage && ($action === 'sso' || in_array($action, self::EMBEDDED_ACTIONS, true))) {
+            $notice = self::MSG_NO_PERMISSION;
+            $action = '';
         }
 
         // SSO-CLIENT-01: handle the in-template "Open full DNS Portal" button.
@@ -1170,6 +1266,9 @@ class PanelDnsResellerService
         // Default — render the overview with usage cards.
         $vars = [
             'paneldns_sub_client_id' => $svc->subClientId(), // NO-EMAIL-LINK-03: dedicatedip only
+            'paneldns_can_manage'    => $mayManage,          // WHMCS-PERM-01: show the DNS buttons
+            'paneldns_manage_reason' => $mayManage ? null : 'DNS management is not available to your user account for this service.',
+            'paneldns_notice'        => $notice,
             'paneldns_status'        => 'unknown',
             'paneldns_usage'         => null,
             'paneldns_limits'        => null,

@@ -62,6 +62,7 @@ if (!function_exists('add_hook')) {
 }
 
 require __DIR__ . '/Support/FakeCapsule.php';
+require __DIR__ . '/Support/FakeWhmcsAuth.php'; // WHMCS-PERM-01: CurrentUser
 
 // The embedded manager starts a PHP session if none is active (WHMCS always has one).
 // Start an in-memory one up front, as WHMCS would have, so tests can set $_SESSION
