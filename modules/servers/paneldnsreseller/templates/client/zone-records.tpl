@@ -127,8 +127,11 @@
                 <td style="padding:10px 12px;text-align:right;color:#6b7280;">{if $r.priority !== null}{$r.priority|escape}{else}—{/if}</td>
                 <td style="padding:10px 12px;text-align:right;white-space:nowrap;">
                     <a href="clientarea.php?action=productdetails&id={$service_id}&customAction=records&zone={$zone.id}&edit={$r.id}" style="color:#0891b2;text-decoration:none;font-size:12.5px;font-weight:500;margin-right:10px;">Edit</a>
+                    {* TPL-ATTR-01 (v1.9.6): the type travels in an HTML-escaped data attribute
+                       (json_encode's quotes ended the onsubmit attribute early). *}
                     <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&customAction=do-record-delete" style="display:inline;"
-                          onsubmit="return confirm('Delete this ' + {$r.type|json_encode} + ' record?');">
+                          data-record-type="{$r.type|escape}"
+                          onsubmit="return confirm('Delete this ' + this.getAttribute('data-record-type') + ' record?');">
                         <input type="hidden" name="csrf" value="{$csrf|escape}">
                         <input type="hidden" name="zone_id" value="{$zone.id}">
                         <input type="hidden" name="record_id" value="{$r.id}">

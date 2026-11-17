@@ -64,8 +64,13 @@
                     <td style="padding:12px;text-align:right;color:#6b7280;font-size:12.5px;">{if $zone.last_synced_at}{$zone.last_synced_at|escape}{else}—{/if}</td>
                     <td style="padding:12px;text-align:right;">
                         <a href="clientarea.php?action=productdetails&id={$service_id}&customAction=records&zone={$zone.id}" style="color:#0891b2;text-decoration:none;font-size:13px;font-weight:500;margin-right:10px;">Manage</a>
+                        {* TPL-ATTR-01 (v1.9.6): the name travels in an HTML-escaped data attribute.
+                           {$zone.name|json_encode} put literal double quotes inside this
+                           double-quoted attribute, which ended it early: the handler was a syntax
+                           error and the form submitted with no confirmation. *}
                         <form method="POST" action="clientarea.php?action=productdetails&id={$service_id}&customAction=do-zone-delete" style="display:inline;"
-                              onsubmit="return confirm('Delete the entire zone ' + {$zone.name|json_encode} + '? This cannot be undone.');">
+                              data-zone-name="{$zone.name|escape}"
+                              onsubmit="return confirm('Delete the entire zone ' + this.getAttribute('data-zone-name') + '? This cannot be undone.');">
                             <input type="hidden" name="csrf" value="{$csrf|escape}">
                             <input type="hidden" name="zone_id" value="{$zone.id}">
                             <button type="submit" style="background:none;border:none;color:#dc2626;font-size:13px;cursor:pointer;font-weight:500;">Delete</button>
