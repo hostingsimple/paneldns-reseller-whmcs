@@ -20,8 +20,10 @@
  *     client may not own.
  *   - DomainDelete: variables at TOP LEVEL — 'userid', 'domainid'. No domain
  *     name is passed, so it is resolved from tbldomains by id.
- *   - AddonActivated / AddonSuspended / AddonTerminated: TOP LEVEL — 'id',
- *     'userid', 'serviceid', 'addonid'. No addon name; resolved from tbladdons.
+ *   - AddonActivated / AddonUnsuspended / AddonSuspended / AddonTerminated /
+ *     AddonCancelled: TOP LEVEL — 'id' (tblhostingaddons.id), 'userid', 'serviceid',
+ *     'addonid'. No addon name; resolved from tbladdons.
+ *     https://developers.whmcs.com/hooks-reference/addon/
  *   - No invoice hook (PAY-02, v1.9.5). onInvoicePaid() and its InvoicePaymentSuccess
  *     hook (a name WHMCS does not have) were removed: on any payment they re-activated
  *     every suspended service of the client. WHMCS's own Enable Unsuspension calls
@@ -286,19 +288,78 @@ class PanelDnsResellerHooks
     }
 
     /**
-     * ADDON-01: adjust a sub-client's zone limit when a product addon is
-     * activated (+) or suspended/terminated (-).
-     *
-     * The number of extra zones is parsed from the addon's name in tbladdons
-     * (e.g. "PanelDNS +10 Zones" → 10). Falls back to 5 if no number is found.
-     *
-     * @param int $serviceId WHMCS hosting service id (tblhosting.id)
-     * @param int $addonId   Predefined addon id (tbladdons.id)
-     * @param int $direction +1 to grant, -1 to revoke
+     * ADDON-ZONES-01 (v1.9.6): the only predefined-addon names that grant zones, e.g.
+     * "PanelDNS +10 Zones". The whole name must match; there is no fallback.
      */
-    public static function onAddonChange(int $serviceId, int $addonId, int $direction): void
+    const ZONE_PACK_PATTERN = '/^\s*PanelDNS\s*\+\s*(\d{1,5})\s*zones?\s*$/i';
+
+    /**
+     * ADDON-ZONES-01: while an addon hook runs, the state the addon is moving to
+     * (tblhostingaddons.id => active), so the count does not depend on whether WHMCS has
+     * written the addon's new status before running the hook.
+     *
+     * @var array<int,bool>
+     */
+    public static $addonStateOverride = [];
+
+    /**
+     * ADDON-ZONES-01: the zones an addon of this name grants; 0 when it is not a PanelDNS
+     * zone pack.
+     *
+     * @internal public for unit tests.
+     */
+    public static function zonePackSize(string $addonName): int
     {
-        if ($serviceId <= 0) {
+        return preg_match(self::ZONE_PACK_PATTERN, $addonName, $m) ? (int) $m[1] : 0;
+    }
+
+    /**
+     * ADDON-ZONES-01: the extra zones the service's ACTIVE PanelDNS zone-pack addons
+     * grant, counted from tblhostingaddons each time. Throws on a DB error: a limit
+     * computed without the addons would take zones away.
+     */
+    public static function addonZones(int $serviceId): int
+    {
+        if ($serviceId <= 0) return 0;
+
+        $rows = \WHMCS\Database\Capsule::table('tblhostingaddons')
+            ->join('tbladdons', 'tblhostingaddons.addonid', '=', 'tbladdons.id')
+            ->where('tblhostingaddons.hostingid', $serviceId)
+            ->select(['tblhostingaddons.id', 'tblhostingaddons.status', 'tbladdons.name'])
+            ->get();
+
+        $zones = 0;
+        foreach ($rows as $row) {
+            $id     = (int) ($row->id ?? 0);
+            $active = self::$addonStateOverride[$id] ?? ((string) ($row->status ?? '') === 'Active');
+            if ($active) {
+                $zones += self::zonePackSize((string) ($row->name ?? ''));
+            }
+        }
+        return $zones;
+    }
+
+    /**
+     * ADDON-01 / ADDON-ZONES-01 (v1.9.6): a PanelDNS zone-pack addon on one of this
+     * module's services changed state; re-apply the service's limits.
+     *
+     * The limit is recomputed, not adjusted: product (or "Zone Limit" Configurable
+     * Option) limit + every active zone pack on the service (addonZones()), through
+     * WHMCS's ModuleChangePackage, i.e. this module's own ChangePackage — the same
+     * function CreateAccount and package upgrades use. Up to 1.9.5 every addon on the
+     * service, whatever it was, added the number in its name or 5 by default, and
+     * suspend/terminate subtracted it again: any cheap addon granted 5 zones, suspend +
+     * unsuspend lost zones for good (AddonUnsuspended was not hooked), suspend + terminate
+     * subtracted twice, and the next ChangePackage reset the grants.
+     *
+     * @param int  $serviceId      WHMCS hosting service id (tblhosting.id)
+     * @param int  $addonId        predefined addon id (tbladdons.id)
+     * @param int  $hostingAddonId the service's addon row (tblhostingaddons.id; the hook's 'id')
+     * @param bool $active         the state the addon is moving to
+     */
+    public static function onAddonChange(int $serviceId, int $addonId, int $hostingAddonId, bool $active): void
+    {
+        if ($serviceId <= 0 || $addonId <= 0) {
             return;
         }
 
@@ -326,28 +387,25 @@ class PanelDnsResellerHooks
                 return;
             }
 
-            // Resolve the addon name (the hook does not pass it).
-            $addonName = '';
-            if ($addonId > 0) {
-                $addonName = (string) \WHMCS\Database\Capsule::table('tbladdons')
-                    ->where('id', $addonId)
-                    ->value('name');
-            }
-
-            preg_match('/\+?\s*(\d+)\s*zone/i', $addonName, $m);
-            $extraZones = isset($m[1]) ? (int) $m[1] : 5;
-
-            $api = self::apiForServer($service);
-
-            $current = $api->getSubClient($subClientId);
-            if (!($current['ok'] ?? false)) {
+            // Resolve the addon name (the hook does not pass it). Any other addon on the
+            // service (support, SSL, a free extra) changes nothing.
+            $addonName = (string) \WHMCS\Database\Capsule::table('tbladdons')
+                ->where('id', $addonId)
+                ->value('name');
+            if (self::zonePackSize($addonName) <= 0) {
                 return;
             }
 
-            $currentLimit = (int) ($current['data']['zone_limit'] ?? 0);
-            $newLimit     = max(0, $currentLimit + ($direction * $extraZones));
-
-            $api->patchSubClient($subClientId, ['zone_limit' => $newLimit]);
+            self::$addonStateOverride = $hostingAddonId > 0 ? [$hostingAddonId => $active] : [];
+            try {
+                $result = localAPI('ModuleChangePackage', ['serviceid' => $serviceId]);
+            } finally {
+                self::$addonStateOverride = [];
+            }
+            if (($result['result'] ?? '') !== 'success') {
+                logActivity("PanelDNS: re-applying the zone limit of service #{$serviceId} after an addon change failed: "
+                    . substr((string) ($result['message'] ?? 'unknown error'), 0, 200));
+            }
         } catch (\Throwable $e) {
             // SEC-L06: log class only — exception messages may contain PII or SQL fragments.
             logActivity('PanelDNS addon hook error (' . get_class($e) . ')');

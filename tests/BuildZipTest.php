@@ -158,7 +158,8 @@ PHP);
         $r = self::exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($script) . ' ' . escapeshellarg($root));
         $this->assertSame(0, $r['code'], "load failed:\n" . $r['out'] . $r['err']);
         $this->assertStringContainsString('LOADED PanelDNS (Reseller', $r['out']);
-        $this->assertStringContainsString('hooks=10', $r['out']); // PAY-02: no invoice hook
+        // PAY-02: no invoice hook; ADDON-ZONES-01 (v1.9.6): + AddonUnsuspended, AddonCancelled.
+        $this->assertStringContainsString('hooks=12', $r['out']);
     }
 
     private static function normalise(string $path): string

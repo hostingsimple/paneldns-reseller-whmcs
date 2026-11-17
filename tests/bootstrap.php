@@ -27,10 +27,12 @@ if (!function_exists('logActivity')) {
 }
 
 if (!function_exists('localAPI')) {
+    /** Records the call; a test can answer it with $GLOBALS['__local_api_handler']($command, $vars). */
     function localAPI(string $command, array $vars = []): array
     {
         $GLOBALS['__local_api'][] = [$command, $vars];
-        return ['result' => 'success'];
+        $handler = $GLOBALS['__local_api_handler'] ?? null;
+        return $handler instanceof \Closure ? $handler($command, $vars) : ['result' => 'success'];
     }
 }
 

@@ -255,6 +255,15 @@ class PanelDnsResellerService
             ? (int) $this->params['configoptions']['Max Records Per Zone']
             : (int) ($this->params['configoption2'] ?? 100);
 
+        // ADDON-ZONES-01 (v1.9.6): plus every active "PanelDNS +N Zones" addon on this
+        // service, so CreateAccount, a package upgrade and an addon change all set the same
+        // limit. Up to 1.9.5 ChangePackage reset the limit to the product value and wiped
+        // the addon grants. 0 means "inherit the org plan" (no per-sub-client cap) and
+        // stays 0: adding a pack to it would impose a cap.
+        if ($zoneLimit > 0) {
+            $zoneLimit += PanelDnsResellerHooks::addonZones((int) ($this->params['serviceid'] ?? 0));
+        }
+
         // PanelDNS validates zone_limit 0–10,000 and max_records 0–100,000.
         return [
             'zone_limit'  => max(0, min(10000, $zoneLimit)),

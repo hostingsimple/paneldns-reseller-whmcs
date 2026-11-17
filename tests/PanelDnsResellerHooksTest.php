@@ -22,35 +22,7 @@ final class PanelDnsResellerHooksTest extends TestCase
         PanelDnsResellerHooks::$apiFactory = null;
     }
 
-    // ── Addon zone count parsing ───────────────────────────────────────────────
-
-    /**
-     * The regex that parses extra zones from an addon name is inline in
-     * onAddonChange(). We test the exact pattern here to guard against regressions.
-     *
-     * @dataProvider addonNameProvider
-     */
-    public function test_addon_zone_count_regex(string $name, int $expectedZones): void
-    {
-        preg_match('/\+?\s*(\d+)\s*zone/i', $name, $m);
-        $parsed = isset($m[1]) ? (int) $m[1] : 5;
-        $this->assertSame($expectedZones, $parsed, "Addon name: '{$name}'");
-    }
-
-    public static function addonNameProvider(): array
-    {
-        return [
-            'standard format'       => ['PanelDNS +10 Zones',   10],
-            'no plus sign'          => ['PanelDNS 10 Zones',     10],
-            'lowercase'             => ['paneldns +5 zone',       5],
-            'extra whitespace'      => ['PanelDNS +  25  zones', 25],
-            'zone singular'         => ['DNS +1 Zone',            1],
-            'large number'          => ['PanelDNS +100 Zones',  100],
-            'no number — fallback'  => ['PanelDNS Zone Pack',     5],
-            'number not near zone'  => ['3 Extras DNS Pack',       5], // "zone" not present
-            'number before word'    => ['50 Zones Addon',         50],
-        ];
-    }
+    // Addon zone-pack names: AddonZonePackTest (ADDON-ZONES-01, v1.9.6).
 
     // ── Grace marker helpers ───────────────────────────────────────────────────
 
